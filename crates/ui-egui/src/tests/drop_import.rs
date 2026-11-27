@@ -657,6 +657,23 @@ fn a_queued_drop_waits_for_a_running_lightroom_import_instead_of_being_refused()
     );
 }
 
+/// The review's OK is refused while a Lightroom catalog import owns the catalog, as a drop is: nothing is imported
+/// beside it (CodeRabbit on #2971).
+#[test]
+fn an_import_review_is_not_confirmed_while_a_lightroom_import_runs() {
+    let dir = Scratch::new("review-lightroom");
+    let mut h = app_with_library(&dir);
+    h.app.ui.settings.import_dropped_directly = false;
+    drop_files(&mut h, &[dir.path("trip/a.png")], false);
+    assert!(h.step_until(SETTLE, |h| matches!(h.app.ui.dialog, Some(Dialog::Import { .. }))), "the review opens");
+    let task = crate::lightroom_import::stall_import(&mut h.app);
+    let reply = h.request("ui.dialog.confirm", json!({}), T);
+    assert_ne!(reply["ok"], true, "{reply}");
+    assert!(h.app.import.is_none(), "no import started");
+    assert_eq!(photos(&h), 0);
+    drop(task);
+}
+
 /// Cancelling Open Another…'s asynchronous picker keeps the launch list up; the queued photo is
 /// then held for the library chosen rather than dropped behind the cancelling picker.
 #[test]
@@ -1230,6 +1247,7 @@ fn auto_import_waits_for_a_browse_that_starts_during_its_listing() {
         truncated: false,
         unreadable: 0,
         unsupported: 0,
+        listed: Default::default(),
     }))
     .unwrap();
     drop(tx);

@@ -70,6 +70,25 @@ fn guided_apply(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgr
     dst[i] = b[2u * i] * a[i] + b[2u * i + 1u];
 }
 
+// `clamp_between` (`local::detail_free`): a clamped between b and c, in either order.
+@compute @workgroup_size(256)
+fn clamp_between_k(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) nw: vec3<u32>) {
+    let i = lin_index(g, nw);
+    if (i >= pu(0u)) {
+        return;
+    }
+    let lo = min(b[i], c[i]);
+    let hi = max(b[i], c[i]);
+    let v = a[i];
+    if (v < lo) {
+        dst[i] = lo;
+    } else if (v > hi) {
+        dst[i] = hi;
+    } else {
+        dst[i] = v;
+    }
+}
+
 // Cross guided filter (`masks::guided_cross`), a: guide, b: input. P[1] = 0: (guide, input);
 // 1: (guide·input, guide²).
 @compute @workgroup_size(256)

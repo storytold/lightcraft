@@ -17,6 +17,122 @@ fn breadcrumbs_open_their_folder_as_spelled() {
     assert!(to("").is_empty() && to("/").is_empty() && to(r"\\").is_empty());
 }
 
+/// Issue #3776: one selected photo is counted in the header as two or more are ("1 selected · 3
+/// photos"); with nothing selected the header shows the photo count alone.
+#[test]
+fn the_header_counts_a_single_selected_photo() {
+    use lightcraft_catalog::{Op, Photo, Source};
+    for (selected, folder) in [(0, false), (1, false), (2, false), (0, true), (1, true)] {
+        let mut session = lightcraft_engine::Session::new();
+        for i in 0..3 {
+            let id = session.catalog.alloc_photo_id();
+            let p = Photo::new(id, Source::File { path: format!("/pics/{i}.jpg") }, "x.jpg", "JPEG", 60, 40, "2026-01-01T10:00:00");
+            session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        }
+        session.selection.ids = session.catalog.photos().take(selected).map(|p| p.id).collect();
+        if folder {
+            // a Local folder view: the same count, in the breadcrumb header
+            session.source = lightcraft_engine::LibrarySource::Folder;
+            session.browse = Some(lightcraft_engine::Browse { path: "/pics".into(), subfolders: false });
+        }
+        let mut app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
+        app.ui.view = crate::state::ViewMode::PhotoGrid;
+        let mut h = crate::headless::Headless::new(app, [1400.0, 900.0], 1.0);
+        h.step();
+        h.step();
+        assert_eq!(h.app.session.selection.ids.len(), selected, "the selection is kept");
+        let has = |id: &str| h.app.widgets.iter().any(|(w, _)| w == id);
+        assert!(has("grid:count") && has("grid:folderHeader") == folder, "folder {folder}: {:?}", h.app.widgets);
+        let painted = h.painted_text();
+        let photos = crate::panels::chips::count_text(h.app.session.visible_cloned().len(), h.app.session.source_total(), false);
+        assert!(folder || photos == "3 photos", "{photos}");
+        let expected = if selected == 0 { photos } else { format!("{selected} selected · {photos}") };
+        assert!(painted.contains(&expected), "folder {folder}, {selected} selected: the header shows {expected:?}: {painted:?}");
+        if selected == 0 {
+            assert!(!painted.iter().any(|s| s.contains("selected ·")), "nothing selected, no count: {painted:?}");
+        }
+    }
+    // a language whose word for "selected" agrees with the number reads "noun: number", right for one as for many
+    for (locale, expected) in [(Locale::Es, "Seleccionadas: 1 · x"), (Locale::PtBr, "Selecionadas: 1 · x"), (Locale::Sv, "Markerade: 1 · x")] {
+        crate::i18n::set_language(locale);
+        let one = crate::i18n::tr_format!("{sel_n} selected · {counted}", sel_n = 1, counted = "x");
+        crate::i18n::set_language(Locale::En);
+        assert_eq!(one, expected, "{locale:?}");
+    }
+}
+
+/// Every text the frame painted as it reads on screen (a cut one with its "…"), with where it was painted.
+fn texts_painted(shape: &egui::Shape, out: &mut Vec<(String, Rect)>) {
+    match shape {
+        egui::Shape::Text(text) => {
+            let shown = text.galley.rows.iter().flat_map(|row| row.glyphs.iter().map(|g| g.chr)).collect();
+            out.push((shown, text.visual_bounding_rect()));
+        }
+        egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| texts_painted(s, out)),
+        _ => {}
+    }
+}
+
+/// A library view's count too long for a narrow centre pane (German, at the narrowest the photo
+/// area gets) is cut to stay inside the header, beside the title, and reads in full on hover.
+#[test]
+fn a_long_library_count_stays_inside_a_narrow_header() {
+    for width in [crate::state::MIN_PHOTO_WIDTH, 590.0] {
+        for scale in [1.0, 2.0] {
+            let app = LightcraftApp::new(lightcraft_engine::Session::new(), Services::default());
+            let ctx = egui::Context::default();
+            crate::i18n::set_language(Locale::De);
+            crate::theme::install_fonts(&ctx);
+            crate::theme::apply(&ctx);
+            let counted = crate::i18n::tr_format!("{matching} of {t} photos", matching = 123_456_789, t = 987_654_321);
+            let cnt = crate::i18n::tr_format!("{sel_n} selected · {counted}", sel_n = 123_456_789, counted = counted);
+            let frame = |time: f64, events: Vec<egui::Event>| {
+                let mut header = Rect::NOTHING;
+                let raw = HeadlessView::raw_input(vec2(width, 300.0), scale, time, events);
+                let mut out = ctx.run_ui(raw, |ui| {
+                    egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
+                        header = super::library_header(&app, ui, &cnt);
+                    });
+                });
+                out.textures_delta.clear();
+                let mut texts = Vec::new();
+                for shape in &out.shapes {
+                    texts_painted(&shape.shape, &mut texts);
+                }
+                (texts, crate::widgets::take_registry(&ctx), header)
+            };
+            let (mut texts, mut widgets, mut header) = (Vec::new(), Vec::new(), Rect::NOTHING);
+            for f in 0..3 {
+                (texts, widgets, header) = frame(f as f64 / 60.0, vec![]);
+            }
+            let widget = |id: &str| widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r);
+            let (Some(count), Some(title)) = (widget("grid:count"), widget("grid:title")) else { panic!("no count or title: {widgets:?}") };
+            let at = format!("{width} {scale}");
+            assert!(header.left() >= 0.0 && header.right() <= width, "{at}: header must not expand past the centre pane: {header:?}");
+            assert!(header.contains_rect(count), "{at}: the count stays inside the header: {count:?} in {header:?}");
+            assert!(title.right() <= count.left(), "{at}: the title stays left of the count: {title:?} {count:?}");
+            for (i, (text, a)) in texts.iter().enumerate() {
+                assert!(header.expand(1.0).contains_rect(*a), "{at}: {text:?} painted outside the header: {a:?}");
+                for (other, b) in texts.iter().skip(i + 1) {
+                    assert!(!a.intersects(*b), "{at}: {text:?} overlaps {other:?}");
+                }
+            }
+            // cut where it doesn't fit, and in full on hover
+            let fits = width > 500.0;
+            assert_eq!(texts.iter().any(|(t, _)| *t == cnt), fits, "{at}: {texts:?}");
+            let cut = cnt.split(" von ").next().unwrap_or_default();
+            assert!(fits || texts.iter().any(|(t, _)| t.ends_with('…') && t.starts_with(cut)), "{at}: the count is cut at its end: {texts:?}");
+            let mut shown = Vec::new();
+            for f in 3..120 {
+                let events = if f == 3 { vec![egui::Event::PointerMoved(count.center())] } else { vec![] };
+                (shown, _, _) = frame(f as f64 / 60.0, events);
+            }
+            assert!(shown.iter().any(|(t, _)| *t == cnt), "{at}: the full count shows on hover: {shown:?}");
+            crate::i18n::set_language(Locale::En);
+        }
+    }
+}
+
 fn text_bounds(shape: &egui::Shape, out: &mut Vec<Rect>) {
     match shape {
         egui::Shape::Text(text) => out.push(text.visual_bounding_rect()),

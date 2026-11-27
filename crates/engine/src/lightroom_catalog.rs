@@ -48,8 +48,31 @@ struct Reader {
     db: Database,
     tables: Vec<LiveTable>,
 }
+/// Most bytes of history-step or snapshot settings decoded from one table. They are only archived, and an archive
+/// holds at most [`crate::lightroom_archive::MAX_ARCHIVE_BYTES`] of JSON, so this keeps all a catalog can archive while
+/// a hostile one can't make the reader allocate without bound (each row alone may decode to 16 MiB).
+const MAX_DECODED_SETTINGS: usize = crate::lightroom_archive::MAX_ARCHIVE_BYTES as usize;
+
+/// The column of table `name` that Lightroom Classic 13 and later store as compressed text (see [`decode_compressed`]),
+/// and what a warning calls one and several of its rows.
+fn compressed_settings(name: &str) -> Option<(&'static str, &'static str, &'static str)> {
+    match name {
+        "Adobe_libraryImageDevelopHistoryStep" => Some(("text", "history step", "history steps")),
+        "Adobe_libraryImageDevelopSnapshot" => Some(("text", "snapshot", "snapshots")),
+        _ => None,
+    }
+}
+
 impl Reader {
-    fn table(&self, name: &str, required: bool) -> Result<Vec<Row>, String> {
+    fn table(&self, name: &str, required: bool, warnings: &mut Vec<String>) -> Result<Vec<Row>, String> {
+        self.table_within(name, required, MAX_DECODED_SETTINGS, warnings)
+    }
+
+    /// The rows of table `name`. Its compressed settings column ([`compressed_settings`]) is decoded within `budget`
+    /// bytes for the whole table: each value is charged its declared length before it is inflated, even one that then
+    /// fails to decode. A value that can't be decoded is left out of its row with a warning naming the image, and
+    /// those past the budget with one warning for all. Other BLOB columns are always left out.
+    fn table_within(&self, name: &str, required: bool, budget: usize, warnings: &mut Vec<String>) -> Result<Vec<Row>, String> {
         let Some(t) = self.tables.iter().find(|t| t.name == name) else {
             return if required { Err(format!("unsupported Lightroom catalog: missing {name}")) } else { Ok(Vec::new()) };
         };
@@ -58,28 +81,69 @@ impl Reader {
         if rows.len() > 1_000_000 {
             return Err(format!("{name}: more than one million records"));
         }
-        Ok(rows
-            .into_iter()
-            .map(|r| {
-                columns
-                    .iter()
-                    .cloned()
-                    .zip(r.values.into_iter().map(|v| match v {
-                        SqlValue::Null => Some(Value::Null),
-                        SqlValue::Integer(n) => Some(json!(n)),
-                        SqlValue::Real(n) => Some(json!(n)),
-                        SqlValue::Text(s) => Some(json!(s)),
-                        // Opaque Lightroom payloads never become JSON byte arrays.
-                        SqlValue::Blob(_) => None,
-                    }))
-                    .filter_map(|(column, value)| value.map(|value| (column, value)))
-                    .collect()
-            })
-            .collect())
+        let compressed = compressed_settings(name);
+        let mut left = budget;
+        let mut over_budget = 0usize;
+        let mut out = Vec::with_capacity(rows.len());
+        for r in rows {
+            let mut row = Row::new();
+            let mut settings = None;
+            for (column, value) in columns.iter().zip(r.values) {
+                let value = match value {
+                    SqlValue::Null => Value::Null,
+                    SqlValue::Integer(n) => json!(n),
+                    SqlValue::Real(n) => json!(n),
+                    SqlValue::Text(s) => json!(s),
+                    SqlValue::Blob(bytes) => {
+                        if compressed.is_some_and(|(settings_column, _, _)| settings_column == column) {
+                            settings = Some((column, bytes));
+                        }
+                        // Other opaque Lightroom payloads never become JSON byte arrays.
+                        continue;
+                    }
+                };
+                row.insert(column.clone(), value);
+            }
+            if let (Some((column, bytes)), Some((_, what, _))) = (settings, compressed) {
+                // charged at its declared length before it is inflated (which never goes past that length), so
+                // a row that then fails to decode counts too; past the budget, the rest aren't inflated at all
+                let declared = compressed_len(&bytes);
+                if declared.is_some_and(|n| over_budget > 0 || n > left) {
+                    over_budget += 1;
+                } else {
+                    left -= declared.unwrap_or(0);
+                    match decode_compressed(&bytes, "settings") {
+                        Ok(text) => {
+                            row.insert(column.clone(), Value::String(text));
+                        }
+                        Err(why) => warnings.push(format!(
+                            "image {}: {what} {}: {why}; archived without its settings",
+                            number(&row, "image"),
+                            number(&row, "id_local")
+                        )),
+                    }
+                }
+            }
+            out.push(row);
+        }
+        if let (Some((_, one, many)), 1..) = (compressed, over_budget) {
+            let what = if over_budget == 1 { one } else { many };
+            warnings.push(format!("{over_budget} {what} archived without their settings: more than {} MiB of settings in {name}", budget >> 20));
+        }
+        Ok(out)
+    }
+
+    /// The catalog's `Adobe_storeProviderID` (a UUID), kept by Lightroom in its backups; `None`
+    /// when the table or the value is missing or doesn't look like an id.
+    fn catalog_id(&self) -> Option<String> {
+        let rows = self.table("Adobe_variablesTable", false, &mut Vec::new()).ok()?;
+        let row = rows.iter().find(|r| text(r, "name") == "Adobe_storeProviderID")?;
+        let id = text(row, "value").trim();
+        (!id.is_empty() && id.len() <= 128 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')).then(|| id.to_string())
     }
 
     fn optional_table(&self, name: &str, warnings: &mut Vec<String>) -> Result<Vec<Row>, String> {
-        match self.table(name, false) {
+        match self.table(name, false, warnings) {
             Ok(rows) => Ok(rows),
             Err(error) => {
                 warnings.push(format!("skipping optional Lightroom table {name}: {error}"));
@@ -116,7 +180,7 @@ impl Reader {
                     SqlValue::Integer(n) => Some(json!(n)),
                     SqlValue::Real(n) => Some(json!(n)),
                     SqlValue::Text(s) => Some(json!(s)),
-                    SqlValue::Blob(bytes) if column == "xmp" => match decode_xmp_bytes(&bytes) {
+                    SqlValue::Blob(bytes) if column == "xmp" => match decode_compressed(&bytes, "XMP") {
                         Ok(packet) => Some(Value::String(packet)),
                         Err(error) => {
                             warnings.push(format!("image {image}: {error}"));
@@ -176,6 +240,16 @@ impl CatalogPhoto {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CatalogImport {
     pub source: String,
+    /// The catalog's own id (`Adobe_storeProviderID` in `Adobe_variablesTable`), the same in the
+    /// catalog and in every backup of it, so a backup's collections match those of an earlier import
+    /// of the catalog (issue #2592). `None` when the catalog has none.
+    #[serde(default)]
+    pub catalog_id: Option<String>,
+    /// Where the catalog was when it isn't `source`: for a backup zip, the `.lrcat` it was backed up
+    /// from. Collections imported by earlier releases are keyed on that path, so a backup still finds
+    /// them. `None` when the catalog was read where it is.
+    #[serde(default)]
+    pub catalog_path: Option<String>,
     pub photos: Vec<CatalogPhoto>,
     pub collections: Vec<Row>,
     pub members: Vec<Row>,
@@ -215,6 +289,11 @@ pub enum SkipReason {
 pub(crate) struct ImportIndex {
     pub(crate) photos: BTreeMap<String, u64>,
     pub(crate) collections: BTreeMap<String, u64>,
+    /// The catalog id (`Adobe_storeProviderID`) each collection key was recorded for, when the
+    /// import had one: a path key of one catalog never matches another catalog that later sits at
+    /// the same path. Keys without an owner (earlier releases, catalogs without an id) match any.
+    #[serde(default)]
+    pub(crate) collection_owners: BTreeMap<String, String>,
 }
 
 pub(crate) fn load_index(path: Option<&Path>) -> crate::Result<ImportIndex> {
@@ -246,7 +325,12 @@ pub(crate) struct AppliedImport {
 }
 
 fn identity(data: &CatalogImport, photo: &CatalogPhoto) -> String {
-    if photo.uuid.is_empty() { format!("{}:{}", key(&data.source), photo.source_id) } else { photo.uuid.clone() }
+    // (a backup's photos are recognised by the catalog it was made from, as the catalog's own are)
+    if photo.uuid.is_empty() {
+        format!("{}:{}", key(data.catalog_path.as_deref().unwrap_or(&data.source)), photo.source_id)
+    } else {
+        photo.uuid.clone()
+    }
 }
 
 fn validate(data: &CatalogImport) -> Result<(), String> {
@@ -323,75 +407,35 @@ fn xmp(v: Option<&Value>) -> Result<String, String> {
     }
 }
 
-fn decode_xmp_bytes(bytes: &[u8]) -> Result<String, String> {
-    let size = bytes.get(..4).and_then(|s| <[u8; 4]>::try_from(s).ok()).map(u32::from_be_bytes).ok_or("truncated XMP header")?;
-    if size > 16 << 20 {
-        return Err("XMP packet exceeds 16 MiB".into());
-    }
-    let decoded = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(bytes.get(4..).ok_or("truncated XMP")?, 16 << 20)
-        .map_err(|_| "invalid compressed XMP")?;
-    if decoded.len() != size as usize {
-        return Err("XMP packet length mismatch".into());
-    }
-    String::from_utf8(decoded).map_err(|e| e.to_string())
+/// The decoded length [`decode_compressed`] reads from `bytes`' header, when it has one of at most 16 MiB.
+fn compressed_len(bytes: &[u8]) -> Option<usize> {
+    let size = bytes.get(..4).and_then(|s| <[u8; 4]>::try_from(s).ok()).map(u32::from_be_bytes)?;
+    usize::try_from(size).ok().filter(|size| *size <= 16 << 20)
 }
 
-fn be_word(bytes: &[u8], at: usize) -> Result<u32, String> {
-    let word = bytes.get(at..at + 4).and_then(|s| <[u8; 4]>::try_from(s).ok()).ok_or("truncated WAL")?;
-    Ok(u32::from_be_bytes(word))
-}
-
-fn wal_checksum(bytes: &[u8], big: bool, mut sum: (u32, u32)) -> (u32, u32) {
-    for pair in bytes.as_chunks::<8>().0 {
-        let first = [pair[0], pair[1], pair[2], pair[3]];
-        let second = [pair[4], pair[5], pair[6], pair[7]];
-        let (first, second) =
-            if big { (u32::from_be_bytes(first), u32::from_be_bytes(second)) } else { (u32::from_le_bytes(first), u32::from_le_bytes(second)) };
-        sum.0 = sum.0.wrapping_add(first).wrapping_add(sum.1);
-        sum.1 = sum.1.wrapping_add(second).wrapping_add(sum.0);
+/// Lightroom's compressed text (`Adobe_AdditionalMetadata.xmp`, and history-step and snapshot settings since Lightroom
+/// Classic 13): the decoded length as 4 big-endian bytes, then a zlib stream, at most 16 MiB decoded. Errors name it
+/// `what`.
+fn decode_compressed(bytes: &[u8], what: &str) -> Result<String, String> {
+    if bytes.len() < 4 {
+        return Err(format!("truncated {what} header"));
     }
-    sum
+    let size = compressed_len(bytes).ok_or_else(|| format!("{what} longer than 16 MiB"))?;
+    // inflated no further than its declared length: a stream that goes on is invalid, at no more cost than a valid one
+    let decoded = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(bytes.get(4..).ok_or_else(|| format!("truncated {what}"))?, size)
+        .map_err(|_| format!("invalid compressed {what}"))?;
+    if decoded.len() != size {
+        return Err(format!("{what} length mismatch"));
+    }
+    String::from_utf8(decoded).map_err(|e| format!("{what} not UTF-8: {e}"))
 }
 
 // SQLite file format §4: validate the live checksum chain in constant space, then overlay
-// only its last committed prefix. The forensic timeline materializes EVERY historical
-// database snapshot; it must never be used to validate a large, actively used catalog.
+// only its last committed prefix (shared in craft-sqlite). The forensic timeline materializes
+// EVERY historical database snapshot; it must never be used to validate a large, actively used
+// catalog.
 fn committed_wal_len(main: &[u8], wal: &[u8]) -> Result<usize, String> {
-    if wal.is_empty() {
-        return Ok(0);
-    }
-    let header = wal.get(..32).ok_or("truncated WAL header")?;
-    let magic = be_word(header, 0)?;
-    if !matches!(magic, 0x377f0682 | 0x377f0683) || be_word(header, 4)? != 3_007_000 {
-        return Err("invalid WAL header".into());
-    }
-    let size = main.get(16..18).and_then(|s| <[u8; 2]>::try_from(s).ok()).map(u16::from_be_bytes).ok_or("truncated SQLite header")?;
-    let size = if size == 1 { 65536 } else { u32::from(size) };
-    if !(512..=65536).contains(&size) || !size.is_power_of_two() || be_word(header, 8)? != size {
-        return Err("WAL page size mismatch".into());
-    }
-    let big = magic == 0x377f0683;
-    let mut sum = wal_checksum(&header[..24], big, (0, 0));
-    if sum != (be_word(header, 24)?, be_word(header, 28)?) {
-        return Err("invalid WAL header checksum".into());
-    }
-    let salt = (be_word(header, 16)?, be_word(header, 20)?);
-    let mut committed = 0;
-    let stride = size as usize + 24;
-    for (i, frame) in wal[32..].chunks_exact(stride).enumerate() {
-        if be_word(frame, 0)? == 0 || salt != (be_word(frame, 8)?, be_word(frame, 12)?) {
-            break;
-        }
-        sum = wal_checksum(&frame[..8], big, sum);
-        sum = wal_checksum(&frame[24..], big, sum);
-        if sum != (be_word(frame, 16)?, be_word(frame, 20)?) {
-            break;
-        }
-        if be_word(frame, 4)? != 0 {
-            committed = 32 + (i + 1) * stride;
-        }
-    }
-    Ok(committed)
+    craft_sqlite::wal::committed_prefix_len(main, wal).map_err(String::from)
 }
 
 /// Where a root folder is when its `absolutePath` isn't a folder here (the catalog came from
@@ -440,12 +484,52 @@ pub fn read(path: &Path) -> Result<CatalogImport, String> {
 /// stopping when `cancel` is set. Images whose catalog records are incomplete are left out and
 /// listed in [`CatalogImport::skipped`] instead of failing the read.
 pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize, done: &AtomicUsize) -> Result<CatalogImport, String> {
+    read_source(path, None, cancel, total, done)
+}
+
+/// Where a Lightroom backup's catalog is unpacked while it is read: the open library's `Interop/`
+/// folder (on the library's disk), or `None` for the system's temporary folder.
+pub fn backup_temp_root(s: &crate::Session) -> Option<PathBuf> {
+    s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.join("Interop"))
+}
+
+/// [`read_with_progress`] of a catalog or of a Lightroom catalog backup (`.zip`, issue #2592): a
+/// backup's catalog is unpacked into a private folder under `temp_root` (else the system's temporary
+/// folder), read, and removed again ([`crate::lightroom_backup`]). Paths the catalog records
+/// relative to itself are taken from where the catalog was before it was backed up.
+pub fn read_source(
+    path: &Path,
+    temp_root: Option<&Path>,
+    cancel: &AtomicBool,
+    total: &AtomicUsize,
+    done: &AtomicUsize,
+) -> Result<CatalogImport, String> {
     // 13 catalog tables plus one validation stage; ImportJob adds one unit per original path.
     total.store(14, Ordering::Relaxed);
     done.store(0, Ordering::Relaxed);
     ensure_read_active(cancel)?;
+    if crate::lightroom_backup::is_backup(path) {
+        let root = temp_root.map_or_else(std::env::temp_dir, Path::to_path_buf);
+        let extracted = crate::lightroom_backup::extract(path, &root, cancel)?;
+        let (document, known) = crate::lightroom_backup::original_catalog(path, &extracted.entry);
+        let mut data = read_file(&extracted.catalog, &document, path, cancel, done)?;
+        if !known {
+            // only a guess: it resolves relative paths, but never names the catalog
+            data.catalog_path = None;
+        }
+        return Ok(data);
+    }
+    read_file(path, path, path, cancel, done)
+}
+
+/// Read the catalog file `path`, resolving the paths it records with `document` as the catalog's
+/// place and reporting `source` as where it came from.
+fn read_file(path: &Path, document: &Path, source: &Path, cancel: &AtomicBool, done: &AtomicUsize) -> Result<CatalogImport, String> {
     let before = std::fs::metadata(path).map_err(|e| e.to_string())?;
-    let wal_path = PathBuf::from(format!("{}-wal", path.display()));
+    // Preserve the native filename when the catalog path cannot be represented as Unicode.
+    let mut wal_path = path.as_os_str().to_os_string();
+    wal_path.push("-wal");
+    let wal_path = PathBuf::from(wal_path);
     let wal_before = std::fs::metadata(&wal_path).ok().map(|m| (m.len(), m.modified().ok()));
     let main = FileSource::open(path)?;
     let wal = match std::fs::metadata(&wal_path) {
@@ -463,9 +547,9 @@ pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize,
     }
     let reader = Reader { tables: db.live_tables()?, db };
     let mut warnings = Vec::new();
-    let table = |name: &str, required: bool| -> Result<Vec<Row>, String> {
+    let table = |name: &str, required: bool, warnings: &mut Vec<String>| -> Result<Vec<Row>, String> {
         ensure_read_active(cancel)?;
-        let rows = reader.table(name, required)?;
+        let rows = reader.table(name, required, warnings)?;
         done.fetch_add(1, Ordering::Relaxed);
         Ok(rows)
     };
@@ -475,9 +559,9 @@ pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize,
         done.fetch_add(1, Ordering::Relaxed);
         Ok(rows)
     };
-    let roots: HashMap<_, _> = table("AgLibraryRootFolder", true)?.into_iter().map(|r| (number(&r, "id_local"), r)).collect();
-    let folders: HashMap<_, _> = table("AgLibraryFolder", true)?.into_iter().map(|r| (number(&r, "id_local"), r)).collect();
-    let files: HashMap<_, _> = table("AgLibraryFile", true)?.into_iter().map(|r| (number(&r, "id_local"), r)).collect();
+    let roots: HashMap<_, _> = table("AgLibraryRootFolder", true, &mut warnings)?.into_iter().map(|r| (number(&r, "id_local"), r)).collect();
+    let folders: HashMap<_, _> = table("AgLibraryFolder", true, &mut warnings)?.into_iter().map(|r| (number(&r, "id_local"), r)).collect();
+    let files: HashMap<_, _> = table("AgLibraryFile", true, &mut warnings)?.into_iter().map(|r| (number(&r, "id_local"), r)).collect();
     let develops: HashMap<_, _> = optional_table("Adobe_imageDevelopSettings", &mut warnings)?
         .into_iter()
         .map(|r| (number(&r, "image"), text(&r, "text").to_string()))
@@ -529,7 +613,7 @@ pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize,
     root_ids.sort_unstable();
     for (id, root) in root_ids.iter().filter_map(|id| Some((*id, roots.get(id)?))) {
         let absolute = text(root, "absolutePath");
-        let resolved = match relocated_root(absolute, text(root, "relativePathFromCatalog"), path) {
+        let resolved = match relocated_root(absolute, text(root, "relativePathFromCatalog"), document) {
             Some(found) => {
                 let found = found.to_string_lossy().to_string();
                 warnings.push(format!("root folder {}: {absolute} not found; using {found} (relative to the catalog)", text(root, "name")));
@@ -537,7 +621,7 @@ pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize,
             }
             None => absolute.to_string(),
         };
-        if let Err(crate::doc_path::NotFollowed::Refused(why)) = crate::doc_path::resolve(&resolved, Some(path)) {
+        if let Err(crate::doc_path::NotFollowed::Refused(why)) = crate::doc_path::resolve(&resolved, Some(document)) {
             warnings
                 .push(format!("root folder {}: {resolved} is not opened: {why}; its photos are listed as missing and not added", text(root, "name")));
             refused_roots.insert(id);
@@ -547,7 +631,9 @@ pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize,
     let mut history = group(optional_table("Adobe_libraryImageDevelopHistoryStep", &mut warnings)?);
     let mut snapshots = group(optional_table("Adobe_libraryImageDevelopSnapshot", &mut warnings)?);
     let mut out = CatalogImport {
-        source: path.to_string_lossy().into(),
+        source: source.to_string_lossy().into(),
+        catalog_id: reader.catalog_id(),
+        catalog_path: (document != source).then(|| document.to_string_lossy().into()),
         photos: Vec::new(),
         collections: optional_table("AgLibraryCollection", &mut warnings)?,
         members: optional_table("AgLibraryCollectionImage", &mut warnings)?,
@@ -559,7 +645,7 @@ pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize,
     // these behind and ignores them); they and their virtual copies are skipped and reported
     // instead of failing the import
     let mut orphans = HashSet::new();
-    for image in table("Adobe_images", true)? {
+    for image in table("Adobe_images", true, &mut out.warnings)? {
         ensure_read_active(cancel)?;
         let id = number(&image, "id_local");
         let record = files.get(&number(&image, "rootFile")).ok_or(SkipReason::MissingFile).and_then(|file| {
@@ -584,7 +670,7 @@ pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize,
             orphans.insert(id);
             continue;
         }
-        let (photo_path, original) = original_path(root_path, folder_path, name, path);
+        let (photo_path, original) = original_path(root_path, folder_path, name, document);
         if let Original::Refused(why) = &original
             && !refused_roots.contains(&root_id)
         {
@@ -926,7 +1012,7 @@ fn apply(s: &mut crate::Session, data: CatalogImport, update_existing: bool) -> 
     let archive_dir = s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.join("Interop"));
     let index_path = archive_dir.as_ref().map(|p| p.join("lightroom-index.json"));
     let mut index = load_index(index_path.as_deref())?;
-    let archive_path = archive_dir.as_ref().map(|dir| crate::lightroom_archive::store(dir, &data).map_err(error)).transpose()?;
+    let archive_path = archive_dir.as_ref().map(|dir| crate::lightroom_archive::store(dir, &data).map_err(|e| error(e.to_string()))).transpose()?;
     let undo0 = s.undo.len();
     let existing: HashMap<_, _> =
         s.catalog.photos().filter(|p| p.copy_of.is_none()).filter_map(|p| source_path(p).map(|path| (key(path), p.id))).collect();
@@ -1006,14 +1092,34 @@ fn stage_collections(
         if number(collection, "systemOnly") != 0 {
             continue;
         }
-        let collection_key = format!("{}:{}", key(&data.source), number(collection, "id_local"));
-        let indexed = index
-            .collections
-            .get(&collection_key)
-            .copied()
+        // keyed on the catalog's own id (the same in its backups); imports made before that was
+        // read are keyed on the catalog's path, and are still found by it, also from a backup (the
+        // path of the catalog it was backed up from)
+        let path_key = format!("{}:{}", key(&data.source), number(collection, "id_local"));
+        let original_key = data.catalog_path.as_ref().map(|p| format!("{}:{}", key(p), number(collection, "id_local")));
+        let collection_key = data.catalog_id.as_ref().map_or_else(|| path_key.clone(), |c| format!("lrcat:{c}:{}", number(collection, "id_local")));
+        // A path can be reused by a different catalog. Without an ID we cannot prove that an
+        // owned path key belongs to this input, so refuse instead of silently mixing albums.
+        if data.catalog_id.is_none()
+            && [Some(&path_key), original_key.as_ref()].into_iter().flatten().any(|k| index.collection_owners.contains_key(k))
+        {
+            return Err(error(
+                "the Lightroom catalog has no stable identity and its path was previously associated with a catalog; cannot safely match collections",
+            ));
+        }
+        // a key recorded for another catalog (by its id) is not this one, whatever its path
+        let mine = |k: &String| match (data.catalog_id.as_ref(), index.collection_owners.get(k)) {
+            (Some(c), Some(owner)) => owner == c,
+            _ => true,
+        };
+        let id = [Some(&collection_key), Some(&path_key), original_key.as_ref()]
+            .into_iter()
+            .flatten()
+            .filter(|k| mine(k))
+            .filter_map(|k| index.collections.get(k).copied())
             .map(lightcraft_catalog::AlbumId)
-            .filter(|id| s.catalog.album(*id).is_some() && !assigned.contains(id));
-        let id = match indexed {
+            .find(|id| s.catalog.album(*id).is_some() && !assigned.contains(id));
+        let id = match id {
             Some(id) => id,
             None => {
                 let id = s.catalog.alloc_album_id();
@@ -1027,7 +1133,16 @@ fn stage_collections(
             }
         };
         assigned.insert(id);
-        index.collections.insert(collection_key, id.0);
+        // recorded under its id and the live catalog's path (a backup's: the catalog it was made
+        // from), so a later import of the same catalog finds it in either order; a zip's own path
+        // is not kept when the catalog's is known (every dated backup has a new one)
+        let path_kept = if data.catalog_path.is_some() { None } else { Some(path_key) };
+        for k in [Some(collection_key), path_kept, original_key].into_iter().flatten() {
+            if let Some(c) = &data.catalog_id {
+                index.collection_owners.insert(k.clone(), c.clone());
+            }
+            index.collections.insert(k, id.0);
+        }
         albums.insert(number(collection, "id_local"), id);
     }
     let parents: HashMap<_, _> = rows.iter().map(|r| (number(r, "id_local"), number(r, "parent"))).collect();
@@ -1205,8 +1320,8 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             // The new record takes only what the bytes determine from the photo with the same
             // bytes, never that photo's own state: not its Recently Deleted (#2589), virtual copy,
             // edits, history, versions, ratings, capture time or the metadata a person writes. Its
-            // metadata and capture time are what its own file gives it, as a file import reads them
-            // (copyright, creator…); the catalog's capture time, when it has one, applies on top.
+            // metadata and capture time are what its own file and XMP sidecar give it, as a file
+            // import reads them (copyright, caption, creator…); the catalog's apply on top.
             let name = Path::new(&src.path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| src.path.clone());
             let mut p = Photo::new(
                 s.catalog.alloc_photo_id(),
@@ -1222,28 +1337,30 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             p.duration = duplicate.duration;
             p.as_shot_wb = duplicate.as_shot_wb;
             p.content_hash = duplicate.content_hash.clone();
-            p.embedded_lens = duplicate.embedded_lens;
+            p.embedded_lens = duplicate.embedded_lens.clone();
             p.preview_only = duplicate.preview_only.clone();
             p.preview_checked = duplicate.preview_checked.clone();
-            if let Some(file) = file {
-                p.meta = file.meta.clone();
-                p.captured = file.captured.clone();
-            } else {
+            let file = file.cloned().unwrap_or_else(|| {
                 // (the file wasn't read: only the exposure description, which no command edits;
                 // not GPS, which placing a photo on the map does, nor the capture time, which
                 // Edit Capture Time does)
                 let m = &duplicate.meta;
-                p.meta.camera = m.camera.clone();
-                p.meta.lens = m.lens.clone();
-                p.meta.focal_mm = m.focal_mm;
-                p.meta.aperture = m.aperture;
-                p.meta.shutter = m.shutter.clone();
-                p.meta.iso = m.iso;
-                p.meta.focus = m.focus.clone();
-            }
-            // the settings a file import gives it (as-shot white balance, embedded lens
-            // corrections, the default preset); the catalog's settings apply on top
-            crate::import::apply_import_defaults(s, &mut p);
+                let meta = lightcraft_catalog::Meta {
+                    camera: m.camera.clone(),
+                    lens: m.lens.clone(),
+                    focal_mm: m.focal_mm,
+                    aperture: m.aperture,
+                    shutter: m.shutter.clone(),
+                    iso: m.iso,
+                    focus: m.focus.clone(),
+                    ..Default::default()
+                };
+                crate::import::FileFacts { meta, ..Default::default() }
+            });
+            // as a file import of it: its file's metadata and capture time, the import defaults
+            // (as-shot white balance, embedded lens corrections, the default preset), its XMP
+            // sidecar; the catalog's settings and metadata apply on top
+            crate::import::start_from_file(s, &mut p, file, &now);
             p
         } else {
             let id = s.catalog.alloc_photo_id();

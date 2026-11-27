@@ -8,6 +8,10 @@ pub(super) fn keywords(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) 
     let top = ui.cursor().top();
     if fold_header(app, ui, "keywording", "Keywords") {
         keywording(app, ui);
+    } else if ui.data(|d| d.get_temp::<EnterEdit>(enter_id())).is_some_and(|e| !e.refused) {
+        // a folded box applies the Enter Keywords edit it held, as leaving the box does
+        let selection = app.session.selected();
+        leave_enter_keywords(app, ui, &selection);
     }
     hold_list_in_place(ui, top);
     crate::panels::keyword_list::show(app, ui);
@@ -106,9 +110,8 @@ fn keywording(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         // this edit (the shared field does)
         let returned = r.ending == Some(crate::text_field::Ending::Return) && !text.trim().is_empty();
         // a new name goes inside the default parent (Put New Keywords Inside This Keyword)
-        let as_typed = |app: &LightcraftApp, text: &str| -> Vec<String> {
-            text.split(',').map(|s| app.session.catalog.typed_keyword(s)).filter(|s| !s.is_empty()).collect()
-        };
+        // (`>` and `<` mark a hierarchy as `|` does)
+        let as_typed = |app: &LightcraftApp, text: &str| -> Vec<String> { crate::panels::keywording::typed_names(&app.session.catalog, text) };
         let adding: Option<Vec<String>> = match picked {
             // an offer: it, and the keywords typed before the last comma
             Some(crate::panels::keywording::Picked::Keyword(k)) => {
@@ -135,13 +138,17 @@ fn keywording(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
         ui.data_mut(|d| d.insert_temp(kid, text));
         ui.add_space(8.0);
+        let view = app.ui.keywording_view;
         crate::panels::keywording::view_switch(app, ui);
+        if view == crate::state::KeywordingView::Enter && app.ui.keywording_view != view {
+            leave_enter_keywords(app, ui, &selection);
+        }
         ui.add_space(4.0);
         crate::panels::keywording::scope(app, ui, &selection);
-        if app.ui.keywording_view == crate::state::KeywordingView::Keywords {
-            crate::panels::keywording::chip_row(app, ui, &selection);
-        } else {
-            crate::panels::keywording::names_row(app, ui);
+        match app.ui.keywording_view {
+            crate::state::KeywordingView::Enter => enter_keywords(app, ui, &selection),
+            crate::state::KeywordingView::Keywords => crate::panels::keywording::chip_row(app, ui, &selection),
+            _ => crate::panels::keywording::names_row(app, ui),
         }
         ui.add_space(10.0);
         keyword_set(app, ui);
@@ -198,6 +205,199 @@ fn keywording(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     });
 }
 
+/// An edit of the Enter Keywords box: its text, and the selection it was started on. It is made
+/// only once the box is edited, and the selection-sized parts are shared, so the box's data is not
+/// copied on every frame.
+#[derive(Clone)]
+struct EnterEdit {
+    text: String,
+    /// The selection's keywords when the edit started (shared with `Caches::keyword_chips`).
+    start: std::sync::Arc<Vec<crate::panels::keywording::Chip>>,
+    /// The photos the edit is for (`photo.setMeta` `ids`).
+    ids: std::sync::Arc<[u64]>,
+    /// The selection the edit was started on (`key_of`).
+    selection: u64,
+    /// [`LightcraftApp::selection_changes`] when the edit started: the same photos selected again
+    /// after others are another selection.
+    changes: u64,
+    /// The library the edit was started in ([`lightcraft_engine::Session::library_generation`]):
+    /// photo ids are a library's own, so the same ids in another library are other photos.
+    library: u64,
+    /// The last try to apply it was refused: the text stays to be put right.
+    refused: bool,
+}
+
+impl EnterEdit {
+    fn new(
+        text: String,
+        chips: std::sync::Arc<Vec<crate::panels::keywording::Chip>>,
+        selection: &[PhotoId],
+        key: u64,
+        changes: u64,
+        library: u64,
+    ) -> Self {
+        let mut seen = std::collections::HashSet::new();
+        EnterEdit {
+            text,
+            start: chips,
+            ids: selection.iter().filter(|id| seen.insert(**id)).map(|id| id.0).collect(),
+            selection: key,
+            changes,
+            library,
+            refused: false,
+        }
+    }
+
+    /// Whether the edit was started on `selection` (`key_of`) in the open library, with no other
+    /// selection since.
+    fn is_for(&self, app: &mut LightcraftApp, selection: u64) -> bool {
+        self.selection == selection && self.changes == app.selection_changes() && self.library == app.session.library_generation()
+    }
+}
+
+/// The Enter Keywords box's field.
+const ENTER_FIELD: &str = "field:enterKeywords";
+
+/// Where the Enter Keywords box keeps its edit between frames.
+fn enter_id() -> egui::Id {
+    egui::Id::unique("kw-enter")
+}
+
+/// Applies the Enter Keywords `edit` to the photos it was started on, as one undo step. Returns
+/// whether it was applied (an edit that changes nothing is, and so is one saved in memory but not
+/// written to disk); a refusal or a failed write is said.
+fn apply_enter(app: &mut LightcraftApp, ctx: &egui::Context, edit: &EnterEdit) -> bool {
+    match crate::panels::keywording::entered(&app.session.catalog, &edit.start, &edit.text) {
+        Ok(change) if change.is_empty() => true,
+        Ok(change) => match app.run_typed("photo.setMeta", json!({"ids": &*edit.ids, "addKeywords": change.add, "removeKeywords": change.remove})) {
+            Ok(_) => true,
+            Err(e) => {
+                let applied = e.kind == crate::ErrorKind::NotSaved;
+                app.toast_error(ctx, e.message);
+                applied
+            }
+        },
+        Err(name) => {
+            app.toast_error(ctx, crate::i18n::tr_format!("A keyword name can't end with an asterisk: “{name}”", name = name));
+            false
+        }
+    }
+}
+
+/// Another view chosen while the Enter Keywords box holds an edit: the edit is applied, as leaving
+/// the box applies it, and the box gives up the cursor. An edit of another selection, or of another
+/// library, is given up. A refused edit is kept, marked refused, and comes back when Enter Keywords
+/// is chosen again.
+fn leave_enter_keywords(app: &mut LightcraftApp, ui: &mut egui::Ui, selection: &[PhotoId]) {
+    let id = enter_id();
+    ui.memory_mut(|m| m.surrender_focus(crate::text_field::id(ENTER_FIELD)));
+    let Some(mut edit) = ui.data(|d| d.get_temp::<EnterEdit>(id)) else { return };
+    if edit.is_for(app, crate::key_of(selection)) && !apply_enter(app, ui.ctx(), &edit) {
+        edit.refused = true;
+        ui.data_mut(|d| d.insert_temp(id, edit));
+    } else {
+        ui.data_mut(|d| d.remove::<EnterEdit>(id));
+    }
+}
+
+/// Gives up an Enter Keywords edit, applied or not, and the cursor in its box.
+fn give_up_enter_keywords(ctx: &egui::Context) {
+    ctx.memory_mut(|m| m.surrender_focus(crate::text_field::id(ENTER_FIELD)));
+    ctx.data_mut(|d| d.remove::<EnterEdit>(enter_id()));
+}
+
+/// Gives up an Enter Keywords edit once the selection or the library differs from the one it was
+/// started on, whether its box is drawn or not: the same photos selected again later do not bring
+/// it back.
+pub(crate) fn forget_stale_enter_keywords(app: &mut LightcraftApp, ctx: &egui::Context) {
+    let Some(edit) = ctx.data(|d| d.get_temp::<EnterEdit>(enter_id())) else { return };
+    let selection = crate::key_of(app.session.selected());
+    if !edit.is_for(app, selection) {
+        give_up_enter_keywords(ctx);
+    }
+}
+
+/// Enter Keywords: the selection's keywords as text, separated by commas, one only some of the
+/// photos have marked with an asterisk. Return, leaving the box, choosing another view or folding
+/// the box applies the edit to the photos selected when it started, as one undo step; Esc gives it
+/// up. An edit whose box was hidden with its panel is applied when the box is next drawn. Another
+/// selection while the box is being edited, or another library opened, gives the edit up too. A
+/// refused edit keeps its text and says why.
+fn enter_keywords(app: &mut LightcraftApp, ui: &mut egui::Ui, selection: &[PhotoId]) {
+    let id = enter_id();
+    let key = crate::key_of(selection);
+    let changes = app.selection_changes();
+    let library = app.session.library_generation();
+    let chips = app.caches.keyword_chips(&app.session.catalog, selection);
+    let fid = crate::text_field::id(ENTER_FIELD);
+    let focused = ui.memory(|m| m.has_focus(fid));
+    let kept: Option<EnterEdit> = ui.data(|d| d.get_temp(id));
+    // (an edit of another selection or library is given up, never applied to this one)
+    if kept.as_ref().is_some_and(|e| !e.is_for(app, key)) && focused {
+        ui.memory_mut(|m| m.surrender_focus(fid));
+    }
+    let kept = kept.filter(|e| e.is_for(app, key));
+    // (an edit kept without the cursor lost it while the box was not drawn, its panel hidden)
+    let left_undrawn = !focused && kept.as_ref().is_some_and(|e| !e.refused);
+    // (no edit held: only the shown text is made, and the edit itself once the box is edited)
+    let (kept, mut text) = match kept {
+        Some(mut e) => {
+            let text = std::mem::take(&mut e.text);
+            (Some(e), text)
+        }
+        None => (None, crate::panels::keywording::entered_text(&chips)),
+    };
+    // Return applies the edit (Shift+Return or a pasted line break separates keywords as a comma does)
+    let returned = focused
+        && ui.input_mut(|i| {
+            let plain =
+                |e: &egui::Event| matches!(e, egui::Event::Key { key: egui::Key::Enter, pressed: true, modifiers, .. } if modifiers.is_none());
+            let found = i.events.iter().any(plain);
+            i.events.retain(|e| !plain(e));
+            found
+        });
+    let r = crate::text_field::TextField::multiline(ENTER_FIELD, &mut text)
+        .hint(crate::i18n::tr("Keywords, separated by commas"))
+        .label(crate::i18n::tr("Enter Keywords"))
+        .rows(2)
+        .width(f32::INFINITY)
+        .show(ui);
+    r.response.clone().on_hover_text(crate::i18n::tr(
+        "Return applies the edit to the selected photos; Esc gives it up. An asterisk marks a keyword only some of them have.",
+    ));
+    if r.cancelled() {
+        ui.data_mut(|d| d.remove::<EnterEdit>(id));
+        return;
+    }
+    // (applied as leaving the box applies it)
+    let apply = returned || r.committed() || (left_undrawn && !r.editing);
+    if !apply && !r.editing && !returned && !kept.as_ref().is_some_and(|e| e.refused) {
+        ui.data_mut(|d| d.remove::<EnterEdit>(id));
+        return;
+    }
+    let mut edit = match kept {
+        Some(mut e) => {
+            e.text = text;
+            e
+        }
+        None => EnterEdit::new(text, chips, selection, key, changes, library),
+    };
+    let mut done = false;
+    if apply {
+        let applied = apply_enter(app, ui.ctx(), &edit);
+        edit.refused = !applied;
+        done = applied;
+        if applied && returned {
+            ui.memory_mut(|m| m.surrender_focus(fid));
+        }
+    }
+    if !done && (r.editing || returned || edit.refused) {
+        ui.data_mut(|d| d.insert_temp(id, edit));
+    } else {
+        ui.data_mut(|d| d.remove::<EnterEdit>(id));
+    }
+}
+
 /// Keeps the Keyword List where it is on screen when the Keywords box above it (starting at
 /// `top`) grows or shrinks: a keyword ticked or unticked in the list, another selection. Without it
 /// a long tree slides away from under the pointer by a row of chips each time. It holds only while
@@ -218,7 +418,7 @@ fn hold_list_in_place(ui: &mut egui::Ui, top: f32) {
     // (only the part of it in sight: the pointer on the top bar above a half-hidden box isn't on it)
     let old_box = Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=top + before).intersect(ui.clip_rect());
     let on_box = ui.input(|i| i.pointer.latest_pos()).is_some_and(|p| old_box.contains(p));
-    let typing = ui.memory(|m| m.has_focus(crate::text_field::id("field:keyword")));
+    let typing = ui.memory(|m| ["field:keyword", ENTER_FIELD].iter().any(|f| m.has_focus(crate::text_field::id(f))));
     if on_box || typing {
         return;
     }
