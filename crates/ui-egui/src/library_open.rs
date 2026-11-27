@@ -26,6 +26,11 @@ const FRAMES_SHOWN: u8 = 2;
 /// `app.openLibrary {path}` from a menu item or a folder dialog's answer: wait to open it until the
 /// window says so → `Some(Ok(null))`. `None` for any other command (run it as usual).
 pub fn later(app: &mut LightcraftApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
+    // (the launch list opens its choice at once: it has its own screen, and files waiting to be
+    // imported into that library go in as soon as it is open)
+    if app.library_problem.is_some() {
+        return None;
+    }
     let path = params.get("path").and_then(Value::as_str).filter(|_| id == "app.openLibrary")?;
     let name = crate::panels::settings::library_name(std::path::Path::new(path));
     let message = crate::i18n::tr_format!("Opening library “{name}”…", name = name);
@@ -51,7 +56,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     let Some(pending) = app.opening_library.as_mut() else { return };
     let t = crate::theme::Tokens::get(ctx);
     let screen = ctx.content_rect();
-    egui::Area::new(egui::Id::new("library-opening")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
+    egui::Area::new(egui::Id::unique("library-opening")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
         let (all, _) = ui.allocate_exact_size(screen.size(), egui::Sense::click_and_drag());
         let p = ui.painter();
         p.rect_filled(all, 0.0, egui::Color32::from_black_alpha(120));
@@ -60,7 +65,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         p.rect_filled(r, 8.0, t.chrome);
         p.rect_stroke(r, 8.0, egui::Stroke::new(1.0, t.divider), egui::StrokeKind::Inside);
         p.galley(r.center() - galley.size() / 2.0, galley, t.text);
-        crate::widgets::register(ctx, "libraryOpening", r);
+        crate::widgets::register(ui, "libraryOpening", r);
     });
     pending.painted = pending.painted.saturating_add(1);
     ctx.request_repaint();
