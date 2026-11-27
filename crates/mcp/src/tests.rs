@@ -602,3 +602,31 @@ fn render_and_screenshot_pngs_go_through_a_private_folder() {
         folders.push(dir);
     }
 }
+
+/// A relative save `path` is made absolute in this process before the desktop checks it, so the check
+/// and the write name the same file whatever the two processes' working directories are.
+#[test]
+fn a_relative_save_path_is_checked_as_the_absolute_path_that_is_written() {
+    struct Rec(Vec<(String, Value)>);
+    impl Backend for Rec {
+        fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+            self.0.push((method.into(), params.clone()));
+            match method {
+                "engine.execute" => Ok(json!({})),
+                _ => Err("stop".into()),
+            }
+        }
+        fn has_ui(&self) -> bool {
+            true
+        }
+        fn describe(&self) -> String {
+            "rec".into()
+        }
+    }
+    let mut b = Rec(Vec::new());
+    let _ = call_tool(&mut b, "render_photo", &json!({"id": 1, "path": "out/x.png"}));
+    let checked = b.0.iter().find(|(m, p)| m == "engine.execute" && p["command"] == "export.checkTarget").expect("the target was checked");
+    let path = checked.1["params"]["path"].as_str().unwrap();
+    assert!(std::path::Path::new(path).is_absolute(), "{path}");
+    assert!(path.ends_with("x.png"));
+}
