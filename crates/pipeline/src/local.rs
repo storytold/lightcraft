@@ -117,10 +117,69 @@ pub fn nr_params(s: &DevelopSettings, scale: f32) -> (Option<NrLum>, Option<NrCo
     craft_develop::local::nr_params(&crate::bridge::to_craft_settings(s), scale)
 }
 
+/// The Contrast slider as a 0..=1 weight. Hoisted out of the pixel loop, which used to divide by 100.
+pub fn nr_contrast_weight(s: &DevelopSettings) -> f32 {
+    let c = (s.detail.nr_contrast / 100.0) as f32;
+    if c.is_finite() { c.clamp(0.0, 1.0) } else { 0.0 }
+}
+
+/// How much of a log-luminance residual noise reduction may still apply.
+///
+/// Contrast 0 returns 1, so the blend is the historical one. At 1 the knee is 0.04 stops and a
+/// residual past about 0.08 stops is left alone.
+pub fn nr_lum_keep(delta: f32, contrast: f32) -> f32 {
+    if contrast == 0.0 {
+        return 1.0;
+    }
+    let knee = 0.04 + (1.0 - contrast) * 0.2;
+    1.0 - ((delta.abs() - knee) / knee).clamp(0.0, 1.0)
+}
+
+/// Luminance noise reduction with the contrast weight applied to the residual.
+fn apply_luminance(img: &mut Rgb32f, nr: NrLum, contrast: f32) {
+    let w = img.width;
+    let l = img.map(log_lum);
+    let f = guided(&l, nr.sigma, nr.eps);
+    crate::for_rows(&mut img.data, w, |y, row| {
+        for (x, p) in row.iter_mut().enumerate() {
+            let i = y * w + x;
+            let delta = f.data[i] - l.data[i];
+            let d = delta * nr.k * nr_lum_keep(delta, contrast);
+            let g = d.exp2();
+            *p = p.map(|v| v * g);
+        }
+    });
+}
+
 pub fn denoise(img: &mut Rgb32f, s: &DevelopSettings, scale: f32, colour_noise: Option<&crate::nrc_joint::JointNoise>) {
+    let contrast = nr_contrast_weight(s);
+    // Contrast 0 is the shared developer's blend, unchanged, including joint colour NR.
+    if contrast == 0.0 {
+        let mut craft = crate::bridge::take_craft_rgb32f(img);
+        craft_develop::local::denoise(&mut craft, &crate::bridge::to_craft_settings(s), scale, colour_noise);
+        crate::bridge::put_craft_rgb32f(img, craft);
+        return;
+    }
+    let (lum, _) = nr_params(s, scale);
+    if let Some(nr) = lum {
+        apply_luminance(img, nr, contrast);
+    }
+    let mut rest = s.clone();
+    rest.detail.nr_luminance = 0.0;
     let mut craft = crate::bridge::take_craft_rgb32f(img);
-    craft_develop::local::denoise(&mut craft, &crate::bridge::to_craft_settings(s), scale, colour_noise);
+    craft_develop::local::denoise(&mut craft, &crate::bridge::to_craft_settings(&rest), scale, colour_noise);
     crate::bridge::put_craft_rgb32f(img, craft);
+}
+
+/// Luminance noise reduction for the colour-noise model. Contrast 0 uses [`apply_nr`].
+pub(crate) fn apply_luminance_nr(img: &mut Rgb32f, lum: Option<NrLum>, contrast: f32) {
+    if contrast == 0.0 {
+        apply_nr(img, lum, None);
+        return;
+    }
+    if let Some(nr) = lum {
+        apply_luminance(img, nr, contrast);
+    }
 }
 
 pub fn apply_nr(img: &mut Rgb32f, lum: Option<NrLum>, col: Option<NrColor>) {
@@ -286,4 +345,44 @@ fn frame_proxy(src: &Rgb32f, frame: &Frame, w: usize, h: usize) -> Arc<Rgb32f> {
 /// Airlight estimate: bright end of the dark channel.
 pub fn airlight(dark: &Plane) -> f32 {
     craft_develop::local::airlight(&crate::bridge::to_craft_plane(dark))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nr_lum_keep_pins_the_contrast_curve() {
+        // Contrast 0 leaves every residual in the blend.
+        assert_eq!(nr_lum_keep(0.01, 0.0), 1.0);
+        assert_eq!(nr_lum_keep(1.0, 0.0), 1.0);
+        // Contrast 100 (weight 1): knee 0.04. A small residual is fully reduced; 0.08 stops is held.
+        assert!((nr_lum_keep(0.01, 1.0) - 1.0).abs() < 1e-5);
+        assert!(nr_lum_keep(0.08, 1.0).abs() < 1e-5);
+        // Contrast 50 (weight 0.5): knee 0.14. Halfway to twice the knee is half the blend.
+        assert!((nr_lum_keep(0.01, 0.5) - 1.0).abs() < 1e-5);
+        assert!((nr_lum_keep(0.21, 0.5) - 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn nr_contrast_keeps_fine_texture() {
+        let src = Rgb32f::from_fn(48, 16, |x, y| {
+            let n = if (x + y) % 2 == 0 { 0.12 } else { -0.12 };
+            [0.3 + n; 3]
+        });
+        let mut flat = DevelopSettings::default();
+        flat.detail.nr_luminance = 100.0;
+        let mut held = flat.clone();
+        held.detail.nr_contrast = 100.0;
+        let mut a = src.clone();
+        let mut b = src.clone();
+        denoise(&mut a, &flat, 1.0, None);
+        denoise(&mut b, &held, 1.0, None);
+        let spread = |img: &Rgb32f| {
+            let row: Vec<f32> = (8..40).map(|x| img.get(x, 8)[0]).collect();
+            let mean = row.iter().sum::<f32>() / row.len() as f32;
+            row.iter().map(|v| (v - mean).abs()).sum::<f32>()
+        };
+        assert!(spread(&b) > spread(&a) * 1.4, "contrast {} vs flat {}", spread(&b), spread(&a));
+    }
 }

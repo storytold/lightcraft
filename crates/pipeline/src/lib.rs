@@ -580,13 +580,13 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     ));
     let lin_key = hash_of((
         pre_nr_key,
-        [d.nr_luminance, d.nr_detail, d.nr_color, d.nr_color_detail, d.nr_color_smoothness].map(f64::to_bits),
+        [d.nr_luminance, d.nr_detail, d.nr_contrast, d.nr_color, d.nr_color_detail, d.nr_color_smoothness].map(f64::to_bits),
         detail_scale.to_bits(),
         // the process picks the colour filter (Update to Current Process, undo)
         local::joint_colour_nr(s),
     ));
     let lens_subject = lens_blur::subject_estimate(src, s, info.mattes.as_deref()).map(Arc::new);
-    let noise_key = hash_of((pre_nr_key, [d.nr_luminance, d.nr_detail].map(f64::to_bits), detail_scale.to_bits()));
+    let noise_key = hash_of((pre_nr_key, [d.nr_luminance, d.nr_detail, d.nr_contrast].map(f64::to_bits), detail_scale.to_bits()));
     Plan {
         settings,
         frame,
@@ -648,7 +648,7 @@ pub fn colour_noise(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<nrc
             };
             local_tone::apply(&mut img, info, &tile);
             local::white_balance(&mut img, info, s);
-            local::apply_nr(&mut img, lum, None);
+            local::apply_luminance_nr(&mut img, lum, local::nr_contrast_weight(s));
             img
         })
         .collect();

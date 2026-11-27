@@ -1174,7 +1174,8 @@ fn denoise(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>, colour_noise: Option<&Joi
         map(cx, "log_lum_k", n, &[], [Some(&img), None, None], &l);
         let f = guided(cx, &l, w, h, nr.sigma, nr.eps);
         let out = cx.gpu.buffer(n * 3);
-        map(cx, "nr_lum", n, &[nr.k.to_bits()], [Some(&img), Some(&l), Some(&f)], &out);
+        let contrast = local::nr_contrast_weight(&plan.settings);
+        map(cx, "nr_lum", n, &[nr.k.to_bits(), contrast.to_bits()], [Some(&img), Some(&l), Some(&f)], &out);
         img = out;
     }
     if col.is_some() && local::joint_colour_nr(&plan.settings) {

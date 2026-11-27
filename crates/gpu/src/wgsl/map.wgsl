@@ -158,14 +158,24 @@ fn wb_k(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) nw
     put_rgb(i, max(c * 1.0, vec3<f32>(0.0)));
 }
 
-// Luminance NR: scale by 2^((f − l)·k) (a: image, b: log luminance l, c: filtered f). P[1] = k.
+// Luminance NR (`local::nr_lum_keep`): scale by 2^((f − l)·k·keep).
+// a: image, b: log luminance l, c: filtered f. P[1] = k, P[2] = contrast in 0..=1.
+// Contrast 0 keeps the whole residual. At 1 the knee is 0.04 stops and a residual past
+// about 0.08 stops is left alone.
 @compute @workgroup_size(256)
 fn nr_lum(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) nw: vec3<u32>) {
     let i = lin_index(g, nw);
     if (i >= pu(0u)) {
         return;
     }
-    let d = (c[i] - b[i]) * pf(1u);
+    let delta = c[i] - b[i];
+    let contrast = pf(2u);
+    var keep = 1.0;
+    if (contrast != 0.0) {
+        let knee = 0.04 + (1.0 - contrast) * 0.2;
+        keep = 1.0 - clamp((abs(delta) - knee) / knee, 0.0, 1.0);
+    }
+    let d = delta * pf(1u) * keep;
     put_rgb(i, rgb_a(i) * exp2(d));
 }
 
