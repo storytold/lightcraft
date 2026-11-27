@@ -95,3 +95,74 @@ pub(crate) fn gpu_lost_check_at(marker: Option<&std::path::Path>, in_memory: boo
         reason.trim()
     ))
 }
+
+/// Set on a start made by [`restart_after_gpu_lost`]: when it was made (seconds since 1970).
+const RESTART_VAR: &str = "LIGHTCRAFT_GPU_LOST_RESTART";
+/// A start that loses the device again within this long after a restart stops with the dialog.
+const RESTART_MIN_SECS: u64 = 120;
+
+/// Why the window's renderer panicked, when it was on a lost GPU device (issue #1337): wgpu-core
+/// unwraps `Err(Lost)` in `PendingWrites::activate` after a driver reset, before any device-lost
+/// callback runs, so the panic message is the only sign. `None` for any other panic.
+pub(crate) fn lost_device_panic(payload: &(dyn std::any::Any + Send)) -> Option<String> {
+    let msg = payload.downcast_ref::<String>().map(String::as_str).or_else(|| payload.downcast_ref::<&str>().copied())?;
+    let lower = msg.to_ascii_lowercase();
+    let lost = msg.trim_end().ends_with("`Err` value: Lost") || lower.contains("device is lost") || lower.contains("device lost");
+    lost.then(|| "the window's GPU device was lost".to_string())
+}
+
+/// Whether to start again after a GPU loss: not when this start was itself a restart made less
+/// than [`RESTART_MIN_SECS`] ago (`previous`, from [`RESTART_VAR`]), so a device that dies right
+/// away again ends in the dialog, not a loop.
+pub(crate) fn may_restart_after_gpu_lost(previous: Option<&str>, now: u64) -> bool {
+    previous.and_then(|p| p.trim().parse::<u64>().ok()).is_none_or(|p| now.saturating_sub(p) >= RESTART_MIN_SECS)
+}
+
+/// The arguments for the restart: the options, without the files named at launch (they were
+/// imported already and are not imported again).
+pub(crate) fn restart_args(args: impl IntoIterator<Item = std::ffi::OsString>) -> Vec<std::ffi::OsString> {
+    let mut kept = Vec::new();
+    let mut args = args.into_iter();
+    while let Some(a) = args.next() {
+        match a.to_str() {
+            Some("--control" | "--library") => {
+                kept.push(a);
+                kept.extend(args.next());
+            }
+            Some(o) if o.starts_with("--") => kept.push(a),
+            _ => {}
+        }
+    }
+    kept
+}
+
+/// What the restarted window says.
+pub(crate) fn gpu_lost_restart_notice(reason: &str) -> String {
+    format!(
+        "LightCraft restarted because the graphics driver reset the GPU ({reason}). Your library was saved; an import or export that \
+         was still running when it happened has to be started again."
+    )
+}
+
+/// The restarted start: the notice to show, when this start was made by [`restart_after_gpu_lost`].
+pub(crate) fn gpu_lost_restart_check() -> Option<String> {
+    std::env::var_os(RESTART_VAR).map(|_| gpu_lost_restart_notice("the window's GPU device was lost"))
+}
+
+/// Start LightCraft again after the window stopped on a lost GPU device. `false`: not restarted
+/// (a restart made moments ago, or the program could not be started).
+pub(crate) fn restart_after_gpu_lost() -> bool {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    if !may_restart_after_gpu_lost(std::env::var(RESTART_VAR).ok().as_deref(), now) {
+        log::error!("the GPU was lost again right after a restart; not restarting");
+        return false;
+    }
+    let Ok(exe) = std::env::current_exe() else { return false };
+    log::warn!("the window's GPU device was lost; starting LightCraft again");
+    std::process::Command::new(exe)
+        .args(restart_args(std::env::args_os().skip(1)))
+        .env(RESTART_VAR, now.to_string())
+        .spawn()
+        .map_err(|e| log::error!("could not start LightCraft again: {e}"))
+        .is_ok()
+}
