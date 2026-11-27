@@ -16,7 +16,6 @@ use eframe::egui_wgpu::{WgpuConfiguration, WgpuSetup, WgpuSetupExisting};
 use eframe::wgpu;
 use lightcraft_engine::gpu::backend::{self, Backends, WindowRenderer};
 use std::path::PathBuf;
-
 /// Environment variable counting automatic relaunches after a failed start (bounds the chain).
 const RETRY_VAR: &str = "LIGHTCRAFT_WINDOW_RETRY";
 /// Never more relaunches than renderers to try.
@@ -101,9 +100,25 @@ pub fn choose(files: &Files, compose_window: bool) -> Chosen {
     let mut problems = Vec::new();
     let chosen = if cfg!(windows) {
         pick_probed(files, &order, &mut problems, compose_window)
-    } else if forced == Some(WindowRenderer::Glow) || (forced.is_none() && failed.is_some_and(|f| f != WindowRenderer::Glow)) {
-        // elsewhere eframe's own wgpu set-up stays the default; glow after a failed start
+    } else if forced == Some(WindowRenderer::Glow)
+        || (forced.is_none()
+            && failed
+                .is_some_and(|f| f != WindowRenderer::Glow && (os != "linux" || !matches!(f, WindowRenderer::Wgpu(b) if b.contains(Backends::GL)))))
+    {
+        // elsewhere eframe's own wgpu set-up stays the default; glow after a failed start (on Linux a
+        // failed GL start falls back to Vulkan, the next renderer in the order)
         Some((WindowRenderer::Glow, None))
+    } else if os == "linux" {
+        // When the user explicitly sets LIGHTCRAFT_GPU_BACKEND/WGPU_BACKEND to a specific
+        // backend, honor that choice via window_backends() instead of probing with platform
+        // order (GL first). BackendChoice::Off is treated as Auto for the window (it probes
+        // with the platform fallback order, same as Auto).
+        let env_choice = backend::env_choice();
+        if matches!(env_choice, backend::BackendChoice::Auto | backend::BackendChoice::Off) {
+            pick_probed(files, &order, &mut problems, compose_window)
+        } else {
+            Some((WindowRenderer::Wgpu(backend::window_backends()), None))
+        }
     } else {
         Some((WindowRenderer::Wgpu(backend::window_backends()), None))
     };
@@ -120,6 +135,15 @@ pub fn choose(files: &Files, compose_window: bool) -> Chosen {
         (WindowRenderer::Wgpu(b), None) => {
             if let WgpuSetup::CreateNew(n) = &mut wgpu_options.wgpu_setup {
                 n.instance_descriptor.backends = b;
+                // On Linux, GL needs a display handle to avoid surfaceless EGL
+                // which passes the offscreen probe but fails to create a window surface
+                // with presentable formats.
+                #[cfg(target_os = "linux")]
+                if b.contains(Backends::GL)
+                    && let Ok(el) = winit::event_loop::EventLoop::<()>::new()
+                {
+                    n.instance_descriptor.display = Some(Box::new(el.owned_display_handle()) as Box<dyn wgpu::wgt::WgpuHasDisplayHandle>);
+                }
             }
             eframe::Renderer::Wgpu
         }
@@ -189,7 +213,9 @@ fn pick_probed(
                 files.arm(r);
                 let probed = std::panic::catch_unwind(|| probe(b, compose_window)).unwrap_or_else(|_| Err("panicked".into()));
                 match probed {
-                    Ok(e) => return Some((r, Some(e))),
+                    Ok(e) => {
+                        return Some((r, Some(e)));
+                    }
                     Err(e) => {
                         log::error!("window: the {} renderer failed: {e}", r.name());
                         problems.push(format!("The {} renderer failed ({e}).", r.name()));
@@ -203,13 +229,86 @@ fn pick_probed(
 
 /// Create a device on `backends` and build egui's pipeline on it; any wgpu error is returned.
 fn probe(backends: Backends, compose_window: bool) -> Result<WgpuSetupExisting, String> {
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+    #[cfg(target_os = "linux")]
+    if backends.contains(Backends::GL) {
+        // For GL on Linux, create a probe window to verify the surface has presentable formats.
+        use winit::event_loop::EventLoop;
+        use winit::window::Window;
+
+        let event_loop = EventLoop::<()>::new().map_err(|_| "GL probe requires a display handle on Linux; XOpenDisplay failed".to_string())?;
+        #[derive(Default)]
+        struct GlProbeApp {
+            window: Option<Window>,
+            owned_display: Option<winit::event_loop::OwnedDisplayHandle>,
+        }
+        impl winit::application::ApplicationHandler for GlProbeApp {
+            fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+                if let Ok(w) = event_loop.create_window(Window::default_attributes().with_visible(false).with_title("LightCraft GL Probe")) {
+                    self.owned_display = Some(event_loop.owned_display_handle());
+                    self.window = Some(w);
+                }
+                event_loop.exit();
+            }
+            fn window_event(
+                &mut self,
+                _event_loop: &winit::event_loop::ActiveEventLoop,
+                _window_id: winit::window::WindowId,
+                _event: winit::event::WindowEvent,
+            ) {
+            }
+        }
+        let mut app = GlProbeApp::default();
+        event_loop.run_app(&mut app).map_err(|_| "GL probe event loop failed".to_string())?;
+        let window = app.window.ok_or("GL probe failed to create window")?;
+        let owned_display = app.owned_display.ok_or("GL probe failed to get display handle")?;
+
+        let descriptor = wgpu::InstanceDescriptor {
+            backends,
+            flags: backend::instance_flags_from_env(wgpu::InstanceFlags::from_build_config().with_env()),
+            backend_options: presentation_options(backends, compose_window),
+            memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
+            display: Some(Box::new(owned_display) as Box<dyn wgpu::wgt::WgpuHasDisplayHandle>),
+        };
+        let instance = wgpu::Instance::new(descriptor);
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::from_env().unwrap_or(wgpu::PowerPreference::HighPerformance),
+            ..Default::default()
+        }))
+        .map_err(|e| format!("no adapter: {e}"))?;
+        let base = wgpu::Limits::downlevel_webgl2_defaults();
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("egui wgpu device"),
+            required_limits: wgpu::Limits { max_texture_dimension_2d: adapter.limits().max_texture_dimension_2d, ..base },
+            ..Default::default()
+        }))
+        .map_err(|e| format!("{}: no device: {e}", adapter.get_info().name))?;
+        install_error_handler(&device);
+        check_pipeline(&device, |d| {
+            drop(eframe::egui_wgpu::Renderer::new(d, wgpu::TextureFormat::Bgra8Unorm, eframe::egui_wgpu::RendererOptions::default()));
+        })?;
+        // Verify the surface has presentable formats
+        let surface = instance.create_surface(&window).map_err(|e| format!("failed to create probe surface: {e}"))?;
+        let caps = surface.get_capabilities(&adapter);
+        let has_formats = !caps.formats.is_empty();
+        drop(surface);
+        if !has_formats {
+            return Err("GL probe surface has no presentable formats".into());
+        }
+        // Leak the window to keep the display connection alive for the instance
+        Box::leak(Box::new(window));
+        return Ok(WgpuSetupExisting { instance, adapter, device, queue });
+    }
+
+    // Original path for other backends/platforms
+    let descriptor = wgpu::InstanceDescriptor {
         backends,
         flags: backend::instance_flags_from_env(wgpu::InstanceFlags::from_build_config().with_env()),
         backend_options: presentation_options(backends, compose_window),
         memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
         display: None,
-    });
+    };
+
+    let instance = wgpu::Instance::new(descriptor);
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::from_env().unwrap_or(wgpu::PowerPreference::HighPerformance),
         ..Default::default()
