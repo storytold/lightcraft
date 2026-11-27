@@ -554,7 +554,7 @@ fn status_json(s: &Session, photo: Option<PhotoId>) -> Value {
     v
 }
 
-/// A per-photo switch, independent of the selection and Auto Sync. Turning on starts at 50%.
+/// A per-photo switch, carried by Auto Sync like any other develop setting. Turning on starts at 50%.
 fn toggle(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "denoise.toggle";
     let id = match p.get("id") {
@@ -586,8 +586,7 @@ fn toggle(s: &mut Session, p: &Value) -> Result<Value> {
         s.end_interaction()?;
         d.enhance.denoise = amount;
         d.enhance.denoise_on = Some(on);
-        let op = s.develop_op(id, d, "AI Denoise").ok_or_else(|| bad(C, "no such photo"))?;
-        s.commit("AI Denoise", op)?;
+        s.set_develop(id, d, "AI Denoise")?;
     }
     if on {
         s.denoise_enqueue(&[id], true, false);
@@ -670,7 +669,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "AI Denoise",
             [],
             None,
-            "{id?: photoId, enabled?: bool} → {id, enabled, amount} — turn AI Denoise on (50% initially) or off for one raw photo, independent of selection and Auto Sync; uses the built-in denoiser when no model is chosen",
+            "{id?: photoId, enabled?: bool} → {id, enabled, amount} — turn AI Denoise on (50% initially) or off for one raw photo; Auto Sync carries the switch to the other selected photos; uses the built-in denoiser when no model is chosen",
             always,
             toggle
         ),

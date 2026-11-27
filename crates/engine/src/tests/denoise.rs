@@ -845,6 +845,27 @@ fn the_denoise_switch_validates_arguments_and_accepts_explicit_targets_without_s
     let _ = std::fs::remove_dir_all(x.dir);
 }
 
+/// Auto Sync carries the AI Denoise switch to the other selected photos, like any other develop setting.
+#[test]
+fn auto_sync_carries_the_denoise_switch_to_the_other_selected_photos() {
+    let mut x = setup("autosync", false);
+    let second = x.dir.join("originals").join("ramp2.dng");
+    std::fs::write(&second, ramp_dng(192, 176, "RGGB")).unwrap();
+    x.s.execute("library.import", &json!({"paths": [second.to_string_lossy()]})).unwrap();
+    let ids: Vec<u64> = x.s.catalog.photos().map(|p| p.id.0).collect();
+    assert_eq!(ids.len(), 2, "{ids:?}");
+    x.s.execute("library.select", &json!({"ids": ids, "active": ids[0]})).unwrap();
+    x.s.execute("develop.autoSync", &json!({"on": true})).unwrap();
+    x.s.execute("denoise.toggle", &json!({"id": ids[0], "enabled": true})).unwrap();
+    let other = x.s.develop_of(lightcraft_catalog::PhotoId(ids[1])).unwrap();
+    assert!(other.enhance.denoise_enabled(), "{:?}", other.enhance);
+    assert_eq!(other.enhance.denoise, 50.0);
+    x.s.execute("denoise.toggle", &json!({"id": ids[0], "enabled": false})).unwrap();
+    assert!(!x.s.develop_of(lightcraft_catalog::PhotoId(ids[1])).unwrap().enhance.denoise_enabled());
+    drop(x.s);
+    let _ = std::fs::remove_dir_all(x.dir);
+}
+
 #[test]
 fn denoise_row_while_queue_is_busy() {
     let mut x = setup("activity", true);
