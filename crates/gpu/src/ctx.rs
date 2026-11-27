@@ -324,13 +324,16 @@ impl Drop for Tracked {
 }
 
 /// Whether an uncaptured error on the renderer's device stops the GPU renderer. The renderer's own
-/// work runs inside error scopes, so on the window's device ([`Gpu::adopt`]) an uncaptured error
-/// naming a `Surface` is the window's swapchain: a resize or a desktop switch can fail one
-/// `Surface::configure` ("Failed to wait for GPU to come idle") with the device fine, and eframe
-/// configures it again. That is logged, not a reason to render on the CPU for the rest of the
-/// session (#4029); a device that is really gone is reported by the device-lost callback.
+/// work runs inside error scopes, so on the window's device ([`Gpu::adopt`]) an uncaptured
+/// `Surface::configure` error is the window's swapchain. One of them passes: a resize or a desktop
+/// switch can time out waiting for the GPU to come idle (wgpu-core's `GpuWaitTimeout`) with the
+/// device fine, and eframe configures it again. That is logged, not a reason to render on the CPU for
+/// the rest of the session (#4029). Every other configure error (a format, usage or size the surface
+/// can't take) fails the same way again, so it stops the renderer as before; a device that is really
+/// gone is reported by the device-lost callback.
 pub(crate) fn stops_renderer(window: bool, error: &str) -> bool {
-    !(window && error.contains("Surface::"))
+    const GPU_WAIT_TIMEOUT: &str = "Failed to wait for GPU to come idle before reconfiguring the Surface";
+    !(window && error.contains("Surface::configure") && error.contains(GPU_WAIT_TIMEOUT))
 }
 
 #[cfg(test)]
@@ -1179,6 +1182,9 @@ mod tests {
         assert!(super::stops_renderer(false, surface), "on a device of the renderer's own every error counts");
         let other = "Validation Error\n\nCaused by:\n  In Queue::submit\n    Buffer is destroyed";
         assert!(super::stops_renderer(true, other), "anything else on the window's device still stops it");
+        // a configure error that retrying the same configuration can't mend still stops it (review of #4032)
+        let format = "Validation Error\n\nCaused by:\n  In Surface::configure\n    Requested format Rgba16Float is not in list of supported formats: [Bgra8Unorm]";
+        assert!(super::stops_renderer(true, format), "an unsupported format is not passed over");
     }
 
     /// Every kernel module, as it is handed to the device (the generated constants, the bindings, `common.wgsl`, the
