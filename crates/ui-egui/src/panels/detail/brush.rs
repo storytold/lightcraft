@@ -169,8 +169,8 @@ pub(super) fn brush_drag(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui
         }
     }
     let (s, f) = current(app);
-    let long = map.rect.width().max(map.rect.height());
-    let r = s * long;
+    // sized as the render sizes strokes and spots: on the uncropped photo's long edge
+    let r = s * map.per_long();
     let p = ui.painter_at(app.canvas_rect.unwrap_or(map.rect));
     ui.ctx().set_cursor_icon(egui::CursorIcon::None);
     let band = if remove { spot_band(feather_band(app.ui.tool == "fill", r, f)) } else { (r * (1.0 - f / 100.0), r) };
