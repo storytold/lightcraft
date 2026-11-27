@@ -30,11 +30,13 @@ pub struct Face {
 pub struct PersonPage {
     pub name: String,
     pub total: usize,
-    pub confirmed: Vec<Face>,
+    pub confirmed: Arc<[Face]>,
     pub more: Vec<Face>,
     /// Recognition is on, so an empty "More" means "none yet" and not "not looking".
     pub ready: bool,
     pub pending: usize,
+    pub updating: bool,
+    pub matching: (usize, usize),
 }
 
 fn face_of(v: &Value) -> Option<Face> {
@@ -50,31 +52,48 @@ fn face_of(v: &Value) -> Option<Face> {
 
 /// The engine's answer as a page (anything that does not make sense is left out).
 pub fn parse(v: &Value) -> PersonPage {
-    let faces = |k: &str| v[k].as_array().map(|a| a.iter().filter_map(face_of).collect()).unwrap_or_default();
+    let faces = |k: &str| v[k].as_array().map(|a| a.iter().filter_map(face_of).collect::<Vec<_>>()).unwrap_or_default();
     PersonPage {
         name: v["name"].as_str().unwrap_or("").to_string(),
         total: v["total"].as_u64().map_or(0, |n| usize::try_from(n).unwrap_or(0)),
-        confirmed: faces("confirmed"),
+        confirmed: faces("confirmed").into(),
         more: faces("more"),
         ready: v["ready"] == true,
         pending: v["pendingPhotos"].as_u64().map_or(0, |n| usize::try_from(n).unwrap_or(0)),
+        updating: v["complete"] == false,
+        matching: (
+            v["matching"]["done"].as_u64().and_then(|n| usize::try_from(n).ok()).unwrap_or(0),
+            v["matching"]["total"].as_u64().and_then(|n| usize::try_from(n).ok()).unwrap_or(0),
+        ),
     }
 }
 
 /// The page for `name`, asked for again only when the catalog changed, or (while the scan runs) at most once a second
 /// as it learns more faces.
 fn page_for(app: &mut LightcraftApp, name: &str, now: f64) -> Arc<PersonPage> {
-    let (rev, indexed) = (app.session.catalog.revision, app.caches.faces_indexed);
+    let (rev, indexed) = (app.session.catalog.revision, app.session.face_index_generation());
     if let Some((n, r, i, at, page)) = &app.caches.person_page
         && n == name
         && *r == rev
-        && (*i == indexed || now - *at < 1.0)
+        && !page.updating
+        && ((*i == indexed && page.pending == 0) || now - *at < 1.0)
     {
         return page.clone();
     }
-    let v = app.session.execute("faces.person", &json!({"name": name})).unwrap_or(Value::Null);
-    let page = Arc::new(parse(&v));
-    app.caches.person_page = Some((name.to_string(), rev, indexed, now, page.clone()));
+    let previous = app.caches.person_page.as_ref().filter(|(n, r, i, _, page)| n == name && *r == rev && (page.updating || *i == indexed));
+    let retained = previous.map(|(_, _, i, _, page)| (*i, page.clone()));
+    let v = app.session.execute("faces.person", &json!({"name": name, "budgetMs": 4, "moreOnly": retained.is_some()})).unwrap_or(Value::Null);
+    let mut page = parse(&v);
+    let confirmed_indexed = if let Some((i, previous)) = retained {
+        page.name = previous.name.clone();
+        page.total = previous.total;
+        page.confirmed = previous.confirmed.clone();
+        i
+    } else {
+        indexed
+    };
+    let page = Arc::new(page);
+    app.caches.person_page = Some((name.to_string(), rev, confirmed_indexed, now, page.clone()));
     page
 }
 
@@ -144,6 +163,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
     let t = Tokens::get(ui.ctx());
     let now = ui.input(|i| i.time);
     let page = page_for(app, name, now);
+    if page.updating {
+        ui.ctx().request_repaint();
+    }
     let shown_name = if page.name.is_empty() { name.to_string() } else { page.name.clone() };
     ui.add_space(8.0);
     ui.horizontal(|ui| {
@@ -191,6 +213,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
         Some(format!("Face recognition is off. Turn it on to find more photos of {shown_name}."))
     } else if !recognising {
         Some(format!("Face recognition needs a model, in Settings, to find more photos of {shown_name}."))
+    } else if page.updating {
+        Some(format!("{}  {} / {}", crate::i18n::tr("Finding faces"), page.matching.0, page.matching.1))
     } else if more.is_empty() && page.pending > 0 {
         Some(format!("Looking through your photos… {} left", page.pending))
     } else if more.is_empty() {
