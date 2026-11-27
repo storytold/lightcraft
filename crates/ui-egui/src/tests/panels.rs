@@ -291,18 +291,18 @@ fn exec(h: &mut Headless, command: &str, params: serde_json::Value) -> serde_jso
     r["result"].clone()
 }
 
-/// The View ▸ Sidebar Sections items: (section id or command, checked).
+/// The Window ▸ Sidebar Sections items: (section id or command, checked).
 fn sidebar_menu_items(h: &Headless) -> Vec<(String, Option<bool>)> {
     use crate::menubar::MenuNode;
     let bar = crate::menubar::menu_bar(&h.app);
-    let view = &bar.iter().find(|(t, _)| t == "View").expect("View menu").1;
-    let children = view
+    let window = &bar.iter().find(|(t, _)| t == "Window").expect("Window menu").1;
+    let children = window
         .iter()
         .find_map(|n| match n {
             MenuNode::Submenu { label, children } if label == "Sidebar Sections" => Some(children.clone()),
             _ => None,
         })
-        .expect("View ▸ Sidebar Sections");
+        .expect("Window ▸ Sidebar Sections");
     children
         .iter()
         .filter_map(|n| match n {
@@ -312,11 +312,11 @@ fn sidebar_menu_items(h: &Headless) -> Vec<(String, Option<bool>)> {
         .collect()
 }
 
-/// Given the sidebar, when a section is unchecked in View ▸ Sidebar Sections, then it leaves the
+/// Given the sidebar, when a section is unchecked in Window ▸ Sidebar Sections, then it leaves the
 /// sidebar (header and rows) and the menu shows it unchecked; checking it again brings it back
 /// as it was. The choice is part of the saved UI state.
 #[test]
-fn a_section_is_hidden_and_shown_from_the_view_menu() {
+fn a_section_is_hidden_and_shown_from_the_window_menu() {
     let mut h = demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
     let checked = |h: &Headless, id: &str| sidebar_menu_items(h).into_iter().find(|(s, _)| s == id).unwrap_or_else(|| panic!("no {id} item")).1;
     assert_eq!(checked(&h, "byDate"), Some(true));
@@ -1126,7 +1126,7 @@ fn album_dialogs_without_a_parent_still_deserialize() {
     assert!(matches!(d, Dialog::NewAlbum { parent: None, .. }));
     let d: Dialog = serde_json::from_value(json!({"kind": "newSmartAlbum", "name": "x"})).unwrap();
     assert!(matches!(d, Dialog::NewSmartAlbum { parent: None, .. }));
-    let mut v = serde_json::to_value(Dialog::SmartRules { id: None, name: "x".into(), rules: Default::default(), parent: Some(3) }).unwrap();
+    let mut v = serde_json::to_value(Dialog::smart_rules(None, "x".into(), Default::default(), Some(3))).unwrap();
     assert_eq!(v["parent"], 3);
     v.as_object_mut().unwrap().remove("parent");
     let d: Dialog = serde_json::from_value(v).unwrap();
@@ -2517,7 +2517,8 @@ fn local_photos_cannot_be_added_to_albums_until_they_join_my_photos() {
     assert_eq!(r["ok"], true, "{r}");
     h.step();
 
-    // Photo ▸ Add to Album: the hint item first (off), the album and New Album… off
+    // Photo ▸ Add to Album: the album and New Album… off, and Add to My Photos is not repeated in it: the Photo
+    // menu's own item, right below the submenu, is the one row for that command (on for a Local photo)
     let add_to_album = |app: &LightcraftApp| -> Vec<crate::menubar::MenuNode> {
         let bar = crate::menubar::menu_bar(app);
         let photo = &bar.iter().find(|(t, _)| t == "Photo").expect("Photo menu").1;
@@ -2536,7 +2537,12 @@ fn local_photos_cannot_be_added_to_albums_until_they_join_my_photos() {
         })
     };
     let nodes = add_to_album(&h.app);
-    assert!(matches!(nodes.first(), Some(crate::menubar::MenuNode::Item { id, enabled: false, .. }) if id == "photo.addToLibrary"), "{nodes:?}");
+    assert_eq!(enabled_of(&nodes, "photo.addToLibrary"), None, "{nodes:?}");
+    let bar = crate::menubar::menu_bar(&h.app);
+    let photo = &bar.iter().find(|(t, _)| t == "Photo").expect("Photo menu").1;
+    let rows = photo.iter().filter(|n| matches!(n, crate::menubar::MenuNode::Item { id, .. } if id == "photo.addToLibrary")).count();
+    assert_eq!(rows, 1, "one Add to My Photos row in the Photo menu: {photo:?}");
+    assert_eq!(enabled_of(photo, "photo.addToLibrary"), Some(true), "{photo:?}");
     assert_eq!(enabled_of(&nodes, "album.addPhotos"), Some(false), "{nodes:?}");
     assert_eq!(enabled_of(&nodes, "dialog.newAlbum"), Some(false), "{nodes:?}");
 

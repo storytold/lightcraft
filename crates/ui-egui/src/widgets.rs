@@ -419,6 +419,12 @@ const THUMB_RING: f32 = 7.0;
 /// Esc keeps the old one. Drag the value sideways to scrub it, as if dragging the thumb (Shift: a tenth
 /// as far).
 pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_override: Option<&str>) -> SliderOut {
+    slider_named(ui, spec, value, enabled, label_override, None)
+}
+
+/// [`slider`] that a screen reader calls `spoken` (already translated) rather than by its short drawn label: the
+/// Color Mixer's All view draws "Red" three times, once per group, and says "Red (Hue)", "Red (Saturation)"…
+pub fn slider_named(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_override: Option<&str>, spoken: Option<&str>) -> SliderOut {
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
     let (row, _) = ui.allocate_exact_size(vec2(w, t.slider_row_h), Sense::hover());
@@ -432,7 +438,7 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     let resp = ui.interact(track_rect.expand2(vec2(8.0, 2.0)), id, if enabled { Sense::click_and_drag() } else { Sense::hover() });
     let (wheel_armed, pointer_in_row) = update_wheel_arming(ui, id, &resp, row, enabled);
     // screen readers: a slider named after its control, with its value
-    let label_text = crate::i18n::tr(label_override.unwrap_or(spec.label)).to_string();
+    let label_text = spoken.map_or_else(|| crate::i18n::tr(label_override.unwrap_or(spec.label)).to_string(), str::to_string);
     resp.widget_info(|| egui::WidgetInfo::slider(enabled, value, label_text.clone()));
     describe_slider(ui, &g, &resp);
     // the name: double-click it to reset, as the thumb (a disabled slider's name is only text)
@@ -1062,6 +1068,42 @@ pub fn dropdown_within(ui: &mut Ui, id: &str, text: &str, font: egui::FontId, co
     ui.painter().galley(pos2(r.left(), r.center().y - galley.size().y / 2.0), galley, c);
     paint(ui.painter(), Rect::from_center_size(pos2(r.right() - 10.0, r.center().y), vec2(16.0, 16.0)), Icon::ChevronDown, c);
     if elided { resp.on_hover_text(text) } else { resp }
+}
+
+/// A row of `label` and a [`dropdown`] beside it, as White Balance has: the panel way to pick one
+/// of several modes, where a row of buttons for each would take more room than the choice is
+/// worth. `items` are (value, menu label, key); the closed dropdown names the item whose value is
+/// `current`, or the first when none is, so put first what happens with nothing chosen. It is as
+/// wide as that item, `hint` (when not empty) shows on hover, and screen readers hear `label` as
+/// its name and the item as its value. The dropdown registers as `dropdown:{id}` and each menu item
+/// as `{id}:{key}`. Returns the value chosen this frame.
+pub fn labeled_dropdown<T: Copy + PartialEq>(ui: &mut Ui, id: &str, label: &str, hint: &str, items: &[(T, &str, &str)], current: T) -> Option<T> {
+    let t = Tokens::get(ui.ctx());
+    let active = items.iter().position(|(v, _, _)| *v == current).unwrap_or(0);
+    let mut chosen = None;
+    ui.horizontal(|ui| {
+        let name = crate::i18n::tr(label);
+        ui.label(egui::RichText::new(name).color(t.text_dim));
+        let shown = items.get(active).map_or("", |(_, l, _)| crate::i18n::tr(l));
+        let mut r = dropdown(ui, id, shown, t.font(12.5), t.text_label);
+        if !hint.is_empty() {
+            r = r.on_hover_text(crate::i18n::tr(hint));
+        }
+        ui.ctx().accesskit_node_builder(r.id, |node| {
+            node.set_label(name.to_string());
+            node.set_value(shown.to_string());
+        });
+        egui::Popup::menu(&r).show(|ui| {
+            for (i, (v, l, key)) in items.iter().enumerate() {
+                let item = ui.selectable_label(i == active, crate::i18n::tr(l));
+                register(ui, format!("{id}:{key}"), item.rect);
+                if item.clicked() {
+                    chosen = Some(*v);
+                }
+            }
+        });
+    });
+    chosen
 }
 
 #[cfg(test)]

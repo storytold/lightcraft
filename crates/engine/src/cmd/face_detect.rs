@@ -302,7 +302,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(
             "faces.detect",
             "Detect Faces",
-            ["Photo"],
+            ["Photo", "Metadata"],
             None,
             "{ids?, apply?: bool (default true), score?: 0.6, nmsIou?: 0.3, maxFaces?} → {photos: [{id, faces: [{rect, score, landmarks}]}]}. Finds faces with the YuNet detector (download it first: `faces.models.download {id: \"yunet-2023mar\"}`) and, unless `apply` is false, adds them as unnamed face regions (one undo step), replacing earlier detections but never regions from XMP or ones you named; the sidecar is not touched",
             has_selection,
@@ -313,7 +313,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Face Models on the GPU",
             [],
             None,
-            "{cpuOnly?: bool} → {cpuOnly, detection, recognition}: where the face models run, each as {checking, device, why} (null until it is loaded). The GPU is used only after a background check shows it gives the CPU's results faster; `cpuOnly: true` keeps every face model on the CPU (Settings ▸ Faces), `false` checks the GPU again",
+            "{cpuOnly?: bool} → {cpuOnly, detection, recognition}: where the face models run, each as {checking, device, why} (null until it is loaded). The GPU is used only after a background check shows it gives the CPU's results faster; `cpuOnly: true` keeps every face model on the CPU (Settings → Faces), `false` checks the GPU again",
             always,
             gpu
         ),
