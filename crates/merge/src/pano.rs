@@ -53,6 +53,10 @@ impl Default for PanoOptions {
 /// The largest panorama, in megapixels (Lightroom's limit too); a bigger one is scaled down.
 pub const MAX_MEGAPIXELS: f64 = 512.0;
 
+/// The smallest output size limit the stitch keeps, in megapixels: a smaller one is raised to it.
+/// Photos with fewer pixels still make a smaller panorama (they are never scaled up).
+pub const MIN_MEGAPIXELS: f64 = 0.1;
+
 /// Most frames one stitch accepts: pair matching compares every pair of frames (n(n−1)/2 runs), so an
 /// unbounded frame count is quadratic CPU as well as quadratic memory while the frames load. A panorama
 /// with more than [`MAX_FRAMES`] shots is refused with an error, not attempted.
@@ -255,7 +259,7 @@ pub fn stitch(mut frames: Vec<Frame>, opts: &PanoOptions, progress: &Progress) -
         return Err(MergeError::NoOverlap(format!("the field of view ({:.0}°) is too wide for a perspective projection", fov.0)));
     }
     // output scale: native resolution, limited to max_megapixels and the longest edge
-    let max_px = if opts.max_megapixels.is_nan() { MAX_MEGAPIXELS } else { opts.max_megapixels.clamp(0.1, MAX_MEGAPIXELS) } * 1e6;
+    let max_px = if opts.max_megapixels.is_nan() { MAX_MEGAPIXELS } else { opts.max_megapixels.clamp(MIN_MEGAPIXELS, MAX_MEGAPIXELS) } * 1e6;
     let surface = (bx1 - bx0) * (by1 - by0);
     // Bundle adjustment fits the focal length freely, and a few wide frames can settle it below the
     // lens's: the canvas, sized from it, then holds fewer pixels than the photos do. The lens's own
