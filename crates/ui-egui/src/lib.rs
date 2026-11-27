@@ -36,6 +36,7 @@ pub mod lightroom_import;
 pub mod links;
 pub mod loupe_timing;
 pub mod menus;
+pub mod missing_photos;
 mod missing_sweep;
 pub mod motion;
 pub mod panels;

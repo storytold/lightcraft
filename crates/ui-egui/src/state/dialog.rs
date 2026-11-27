@@ -375,6 +375,16 @@ pub enum Dialog {
         remove_missing: bool,
         read_metadata: bool,
     },
+    /// File ▸ Missing Photos…: every photo whose original isn't where the library expects it, with the path
+    /// it may be at now ([`crate::missing_photos`]).
+    MissingPhotos {
+        /// The missing photos (`None` while their files are being looked at).
+        rows: Option<Vec<MissingRow>>,
+        /// Replace: the beginning of the old paths …
+        from: String,
+        /// … and what it becomes.
+        to: String,
+    },
     About,
     Shortcuts,
     /// View ▸ Loupe Overlay ▸ View Options… (⌘J): the info overlay and the lines of Info 1 and Info 2. Changes apply
@@ -384,6 +394,33 @@ pub enum Dialog {
 
 fn yes() -> bool {
     true
+}
+
+/// A photo in the Missing Photos window.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MissingRow {
+    pub id: u64,
+    /// Where the library expects its original.
+    pub path: String,
+    /// Where it may be now (empty: nothing proposed).
+    pub new_path: String,
+    /// What is at `new_path` (`None`: not checked since it changed).
+    pub status: Option<MissingStatus>,
+    /// Ticked to be relinked.
+    pub chosen: bool,
+}
+
+/// What the Missing Photos window found at a row's new path.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum MissingStatus {
+    Checking,
+    Found,
+    Absent,
+    OtherSize,
+    InUse,
+    NotMissing,
 }
 
 /// How many changes a Synchronize Folder scan found, by kind.
