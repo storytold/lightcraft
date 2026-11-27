@@ -122,9 +122,15 @@ impl OriginalGuard {
         self.others = std::sync::OnceLock::new();
         let mut put = |file: String, p: PathBuf, what: String| self.by_name.entry(file.to_lowercase()).or_default().push((p, what));
         put(name.clone(), path.to_path_buf(), format!("the original of {label}"));
+        // every sidecar name the reader accepts (`.xmp`, `.XMP`, `.Xmp`, a recased photo extension), not only lowercase ones
         let stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
         put(format!("{stem}.xmp"), path.with_extension("xmp"), format!("the XMP sidecar of {label}"));
         put(format!("{name}.xmp"), PathBuf::from(format!("{}.xmp", path.to_string_lossy())), format!("the XMP sidecar of {label}"));
+        for c in crate::sidecar::sidecar_candidates(&path.to_string_lossy(), crate::sidecar::SidecarNaming::Stem) {
+            if let Some(file) = c.file_name().map(|n| n.to_string_lossy().to_string()) {
+                put(file, c, format!("the XMP sidecar of {label}"));
+            }
+        }
     }
 
     /// `Err` (a message for the user) when writing `target` would replace a protected file, or
@@ -328,6 +334,24 @@ mod tests {
         assert!(g.check(&d.join("IMG_1.xmp")).unwrap_err().contains("sidecar"));
         assert!(g.check(&d.join("other.jpg")).is_ok(), "an ordinary existing file");
         assert!(g.check(&d.join("new.jpg")).is_ok(), "a free name");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn sidecars_the_reader_accepts_in_other_cases_are_protected() {
+        let d = std::env::temp_dir().join(format!("lc-originals-case-sidecar-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let orig = d.join("IMG_1.jpg");
+        std::fs::write(&orig, b"original").unwrap();
+        let mut c = Catalog::default();
+        let p = Photo::new(PhotoId(1), Source::File { path: orig.to_string_lossy().to_string() }, "IMG_1.jpg", "JPEG", 10, 10, "2026-01-01");
+        c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        let g = OriginalGuard::new(&c);
+        for name in ["IMG_1.XMP", "IMG_1.Xmp", "IMG_1.JPG.xmp", "IMG_1.jpg.XMP"] {
+            std::fs::write(d.join(name), b"<x/>").unwrap();
+            assert!(g.check(&d.join(name)).unwrap_err().contains("sidecar"), "{name}");
+        }
         let _ = std::fs::remove_dir_all(&d);
     }
 
