@@ -127,7 +127,15 @@ pub(crate) fn to_craft(m: &Metadata) -> craft_metadata::Metadata {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn xmp_from_craft(d: craft_metadata::XmpData) -> XmpData {
     let lc_settings = d.properties.get("lc:settings").and_then(|v| v.first()).cloned();
-    XmpData { metadata: from_craft(d.metadata), lc_settings, properties: d.properties, values: d.values }
+    XmpData {
+        metadata: from_craft(d.metadata),
+        lc_settings,
+        properties: d.properties,
+        values: d.values,
+        properties_truncated: false,
+        names_location: false,
+    }
 }

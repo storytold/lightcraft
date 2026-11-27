@@ -117,6 +117,7 @@ fn edit(s: &mut Session, dice: &mut Dice, ids: &mut Vec<PhotoId>, album: u64) {
                     content_hash,
                     preview_only: p.preview_only.clone(),
                     preview_checked: p.preview_checked.clone(),
+                    duration: p.duration,
                 };
                 let _ = s.commit("Reload", op);
             }

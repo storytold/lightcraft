@@ -32,7 +32,7 @@ pub(super) fn library_files(library: &lightcraft_catalog::Catalog, files: &[Stri
             let c = ImportCandidate {
                 path: path.clone(),
                 format: p.format.clone(),
-                kind: p.kind,
+                kind: p.effective_kind(),
                 width: p.width,
                 height: p.height,
                 file_size: p.file_size,
@@ -41,6 +41,7 @@ pub(super) fn library_files(library: &lightcraft_catalog::Catalog, files: &[Stri
                 // (a trashed browse record still counts as the path's)
                 duplicate: (!p.local || p.deleted).then(|| "path".into()),
                 existing: Some(p.id.0),
+                duration: p.duration,
                 local: p.local && !p.deleted,
                 ..Default::default()
             };
@@ -424,8 +425,8 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
         let mut c = ImportCandidate { path: f.clone(), name, ..Default::default() };
         match probes.remove(&f) {
             Some(Ok(info)) => {
-                (c.format, c.kind, c.width, c.height, c.file_size, c.captured) =
-                    (info.format.clone(), info.kind, info.width, info.height, info.file_size, info.captured.clone());
+                (c.format, c.kind, c.width, c.height, c.file_size, c.captured, c.duration) =
+                    (info.format.clone(), info.kind, info.width, info.height, info.file_size, info.captured.clone(), info.duration);
                 // as the import will date it (a sidecar's date, when there is one, still wins there)
                 c.captured = c.captured.or_else(|| info.file_modified.clone());
                 c.preview_only = info.preview_only.clone();

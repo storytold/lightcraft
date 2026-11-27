@@ -283,6 +283,24 @@ fn composes_pages_from_real_photos() {
     assert!(work.run(&mut |i, _| i < 1).is_err());
 }
 
+/// The reported photo count is what the cells place, not everything selected: Picture Package
+/// draws only the first photo, and a custom cell only draws its own.
+#[test]
+fn a_print_counts_only_the_photos_a_cell_places() {
+    let mut s = Session::with_demo();
+    let ids = first_ids(&s, 3);
+    let mut picture = settings(Style::PicturePackage);
+    picture.layout.add_cell(1.5, 1.0).unwrap();
+    picture.layout.add_cell(1.0, 1.0).unwrap();
+    assert_eq!(prepare(&mut s, &picture, &ids).unwrap().photos(), 1);
+
+    let mut custom = settings(Style::CustomPackage);
+    custom.layout.add_cell(1.5, 1.0).unwrap();
+    let second = custom.layout.add_cell(1.0, 1.0).unwrap();
+    custom.layout.set_cell_photo(second, Some(ids[2].0)).unwrap();
+    assert_eq!(prepare(&mut s, &custom, &ids).unwrap().photos(), 2, "the first and the third stills");
+}
+
 #[test]
 fn package_renders_each_size_and_border() {
     let mut s = Session::with_demo();

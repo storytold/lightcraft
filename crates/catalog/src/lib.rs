@@ -237,6 +237,9 @@ pub enum Op {
         /// retained for supported ORF files so their withdrawal recheck runs only once.
         #[serde(default, skip_serializing_if = "String::is_empty")]
         preview_checked: String,
+        /// A video's running time in seconds as the file reads now (see [`Photo::duration`]).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration: Option<f64>,
     },
     /// The lens data a photo's file carries (what Reload finds when it was read after import).
     SetEmbeddedLens {
@@ -1221,7 +1224,7 @@ impl Catalog {
                 self.index.text_changed(id, self.photos.get(&id).map(|p| &**p));
                 old
             }
-            Op::SetContent { id, width, height, file_size, content_hash, preview_only, preview_checked } => {
+            Op::SetContent { id, width, height, file_size, content_hash, preview_only, preview_checked, duration } => {
                 let p = self.photo_mut(id)?;
                 Op::SetContent {
                     id,
@@ -1231,6 +1234,7 @@ impl Catalog {
                     content_hash: std::mem::replace(&mut p.content_hash, content_hash),
                     preview_only: std::mem::replace(&mut p.preview_only, preview_only),
                     preview_checked: std::mem::replace(&mut p.preview_checked, preview_checked),
+                    duration: std::mem::replace(&mut p.duration, duration),
                 }
             }
             Op::SetEmbeddedLens { id, lens } => {

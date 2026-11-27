@@ -283,6 +283,7 @@ fn same_content_as_another_photo() {
         content_hash: Some(hash.into()),
         preview_only: None,
         preview_checked: String::new(),
+        duration: None,
     };
     cat.apply(set("dd")).unwrap();
     assert_eq!(same(&cat), vec![1, 6, 7]);

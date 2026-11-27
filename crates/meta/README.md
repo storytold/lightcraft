@@ -48,6 +48,13 @@ XMP parser; truncation tests cut a sample JPEG at every byte and exercise trunca
 image-resource records with hostile declared lengths.
 PSD/PSB XMP resources require valid UTF-8; trailing NUL padding is trimmed after validation.
 The HEIF truncation and byte-damage tests cover bounded box and item walks; the reader walks `iloc` once.
+Before an unchanged video Original is exported with Remove Location, `verify_video_location_absent`
+checks native location metadata and every embedded XMP packet. It rejects GPS properties and
+non-empty recognized place names (sublocation, city, state, country and `lc:location`), including
+namespace aliases and structured properties. Empty place-name fields — and QuickTime `©xyz`, `loci`
+and mdta location atoms a writer left cleared — do not block export. The check reads the same
+`moov`/`trak`/`mdia`/`udta` boxes the catalog metadata comes from, and an XMP packet whose flattened
+property inventory a size limit cut short is unverifiable, not location-free.
 
 ISO capture-time parsing requires a complete clock and consumes every clock and fractional-second character. Invalid
 XMP capture-time values remain available in the raw property map but are not projected into `Metadata`; a later valid

@@ -4346,6 +4346,7 @@ dependencies = [
  "craft-tiff",
  "lightcraft-geom",
  "proptest",
+ "quick-xml 0.41.0",
  "serde",
  "serde_json",
 ]
@@ -4511,6 +4512,7 @@ dependencies = [
  "lightcraft-codecs",
  "lightcraft-color",
  "lightcraft-engine",
+ "lightcraft-meta",
  "lightcraft-preview",
  "lightcraft-raster",
  "lightcraft-raw",

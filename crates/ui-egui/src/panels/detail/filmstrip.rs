@@ -122,6 +122,7 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
             crate::panels::grid::request_thumb(app, *id, (256.0 * ppp.min(2.0) / 2.0) as usize * 2, 8);
             let mut badge = None;
             if let Some(photo) = app.session.catalog.photo(*id).cloned() {
+                let video = photo.is_video();
                 let (photo_rect, failure) = if let Some(tex) = app.renderer.thumb(*id) {
                     let [tw, th] = tex.size;
                     let s = (img_area.width() / tw as f32).min(img_area.height() / th as f32);
@@ -129,6 +130,13 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                     p.image(tex.id(), fr, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
                     crate::panels::grid::selection_ring(p, &t, fr, state);
                     (fr, None)
+                } else if video {
+                    // A catalogued clip has no frame to decode yet: a dark tile with its video
+                    // icon, never a failed photo.
+                    p.rect_filled(img_area, 0.0, Color32::from_gray(30));
+                    crate::icons::paint(p, Rect::from_center_size(img_area.center(), vec2(24.0, 24.0)), crate::icons::Icon::Video, t.text_dim);
+                    crate::panels::grid::selection_ring(p, &t, img_area, state);
+                    (img_area, None)
                 } else {
                     let ph = crate::thumb::placeholder_rect(img_area, crate::panels::grid::photo_aspect(Some(&*photo)));
                     crate::thumb::paint_placeholder(p, ph, &t);
@@ -148,6 +156,27 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                     surround: true,
                 };
                 badge = crate::thumb::overlay(app, ui, &overlay);
+            }
+            // A catalogued video has no frame yet: its running time reads it at a glance in the
+            // strip too (the grid and the loupe show the same badges and card).
+            if let Some(ph) = app.session.catalog.photo(*id).filter(|p| p.is_video())
+                && let Some(d) = ph.duration
+            {
+                let p = ui.painter();
+                let text = crate::widgets::format_duration(d);
+                if !text.is_empty() {
+                    let g = p.layout_no_wrap(text, t.semibold(9.0), Color32::WHITE);
+                    let w = g.size().x + 20.0;
+                    let br = Rect::from_min_size(pos2(img_area.right() - w - 2.0, img_area.bottom() - 16.0), vec2(w, 14.0));
+                    p.rect_filled(br, 3.0, Color32::from_black_alpha(175));
+                    crate::icons::paint(
+                        p,
+                        Rect::from_center_size(pos2(br.left() + 8.0, br.center().y), vec2(9.0, 9.0)),
+                        crate::icons::Icon::Video,
+                        Color32::WHITE,
+                    );
+                    p.galley(pos2(br.left() + 14.0, br.center().y - g.size().y / 2.0), g, Color32::WHITE);
+                }
             }
             if resp.clicked() {
                 let m = ui.input(|i| i.modifiers);

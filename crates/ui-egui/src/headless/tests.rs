@@ -2348,6 +2348,7 @@ fn preview_only_raw_shows_badge_and_notices() {
             content_hash: ph.content_hash.clone(),
             preview_only: Some("Nikon Huffman-compressed NEF (no clean-room description available)".into()),
             preview_checked: lightcraft_catalog::APP_VERSION.into(),
+            duration: None,
         })
         .unwrap();
     h.settle(SETTLE);

@@ -13,8 +13,8 @@ use wasm_bindgen_futures::JsFuture;
 
 use crate::backend::Backend;
 use crate::backup::{
-    ACTIVE_LIBRARY, README, ZipWriter, data_offset, find_central, original_entry, parse_central, restore_plan, restored_dir_name, tail_len,
-    valid_hash, verify, verify_original,
+    ACTIVE_LIBRARY, BackupParts, README, ZipWriter, data_offset, find_central, original_entry, parse_central, restore_plan, restored_dir_name,
+    tail_len, valid_hash, verify, verify_checksum,
 };
 use crate::files::{Files, LIBRARY_FILES};
 use crate::store::storage_key;
@@ -157,20 +157,20 @@ pub type Deliver = Box<dyn FnOnce(String, web_sys::Blob) -> std::pin::Pin<Box<dy
 /// every original in storage, built entry by entry into the browser's memory (outside the wasm
 /// heap) and handed to `deliver`. `names`: content hash → the photo's file name.
 pub async fn backup(files: Files, backend: Backend, names: HashMap<String, String>, deliver: Deliver) -> Result<(usize, f64), String> {
-    let parts = js_sys::Array::new();
+    let mut parts = BackupParts::<JsValue>::new();
     let mut zip = ZipWriter::default();
-    let mut bytes = 0f64;
-    let mut add = |zip: &mut ZipWriter, name: &str, data: &[u8]| -> Result<(), String> {
+    let js_bytes = |b: &[u8]| JsValue::from(Uint8Array::from(b));
+    let add = |zip: &mut ZipWriter, parts: &mut BackupParts<JsValue>, name: &str, data: &[u8]| -> Result<(), String> {
         let header = zip.entry(name, data)?;
-        parts.push(&Uint8Array::from(&header[..]));
-        parts.push(&Uint8Array::from(data));
-        bytes += (header.len() + data.len()) as f64;
+        parts.parts.push(js_bytes(&header));
+        parts.parts.push(js_bytes(data));
+        parts.bytes = parts.bytes.saturating_add((header.len() + data.len()) as u64);
         Ok(())
     };
-    add(&mut zip, "README.txt", README.as_bytes())?;
+    add(&mut zip, &mut parts, "README.txt", README.as_bytes())?;
     for name in LIBRARY_FILES {
         if let Some(d) = files.get(name) {
-            add(&mut zip, &format!("library/{name}"), &d)?;
+            add(&mut zip, &mut parts, &format!("library/{name}"), &d)?;
         }
     }
     let mut originals = 0;
@@ -178,10 +178,21 @@ pub async fn backup(files: Files, backend: Backend, names: HashMap<String, Strin
         if !valid_hash(&hash) {
             continue;
         }
-        match backend.read(&storage_key(&hash)).await {
+        match backend.read_original_blob(&storage_key(&hash)).await {
             Ok(Some(data)) => {
                 let name = names.get(&hash).map_or("original", String::as_str);
-                add(&mut zip, &original_entry(&hash, name), &data)?;
+                let size = data.size() as u64;
+                if size > crate::backup::MAX_BYTES {
+                    return Err(format!("{name}: the library is too large for one backup file (4 GB)"));
+                }
+                let mut crc = crc32fast::Hasher::new();
+                let mut at = 0u64;
+                while at < size {
+                    let end = at.saturating_add(1 << 20).min(size);
+                    crc.update(&read_range(&data, at, end).await?);
+                    at = end;
+                }
+                parts.push_original(&mut zip, &original_entry(&hash, name), data.into(), size, crc.finalize(), js_bytes)?;
                 originals += 1;
             }
             Ok(None) => {}
@@ -189,20 +200,31 @@ pub async fn backup(files: Files, backend: Backend, names: HashMap<String, Strin
         }
     }
     let tail = zip.finish()?;
-    parts.push(&Uint8Array::from(&tail[..]));
+    parts.parts.push(js_bytes(&tail));
+    let total = parts.bytes as f64 + tail.len() as f64;
+    let parts: js_sys::Array = parts.parts.into_iter().collect();
     let opts = web_sys::BlobPropertyBag::new();
     opts.set_type("application/zip");
     let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &opts).map_err(|e| format!("{e:?}"))?;
     let day: String = String::from(js_sys::Date::new_0().to_iso_string()).chars().take(10).collect();
     deliver(format!("lightcraft-library-backup-{day}.zip"), blob).await?;
-    Ok((originals, bytes + tail.len() as f64))
+    Ok((originals, total))
 }
 
 /// Bytes `start..end` of a picked file.
-async fn read_range(file: &web_sys::File, start: u64, end: u64) -> Result<Vec<u8>, String> {
+async fn read_range(file: &web_sys::Blob, start: u64, end: u64) -> Result<Vec<u8>, String> {
+    let len = end.checked_sub(start).ok_or("invalid backup byte range")?;
+    lightcraft_engine::files::check_buffered_original_size(len)?;
+    if end as f64 > file.size() {
+        return Err("backup is truncated".into());
+    }
     let blob = file.slice_with_f64_and_f64(start as f64, end as f64).map_err(|e| format!("{e:?}"))?;
     let buf = JsFuture::from(blob.array_buffer()).await.map_err(|e| format!("{e:?}"))?;
-    Ok(Uint8Array::new(&buf).to_vec())
+    let bytes = crate::store::copy_browser_bytes(&Uint8Array::new(&buf))?;
+    if bytes.len() as u64 != len {
+        return Err("backup changed or was truncated while reading".into());
+    }
+    Ok(bytes)
 }
 
 /// Restore a backup into a new library folder (nothing in storage is deleted or overwritten),
@@ -225,11 +247,29 @@ pub async fn restore(file: web_sys::File, backend: Backend) -> Result<String, St
         }
         let local = read_range(&file, e.header, e.header + 30).await?;
         let start = data_offset(e, &local)?;
-        let data = read_range(&file, start, start + e.size).await?;
-        verify(e, &data)?;
-        if let Some(hash) = key.strip_prefix("originals/") {
-            verify_original(e, hash, &data)?;
+        let end = start.checked_add(e.size).filter(|end| *end <= len).ok_or("backup entry extends past the file")?;
+        if let Some(expected_hash) = key.strip_prefix("originals/") {
+            let mut crc = crc32fast::Hasher::new();
+            let mut hash = lightcraft_preview::Hasher128::new();
+            let mut at = start;
+            while at < end {
+                let next = at.saturating_add(1 << 20).min(end);
+                let chunk = read_range(&file, at, next).await?;
+                crc.update(&chunk);
+                hash.update(&chunk);
+                at = next;
+            }
+            verify_checksum(e, e.size, crc.finalize())?;
+            if hash.finish().to_string() != expected_hash {
+                return Err(format!("{}: the file doesn't match its content hash (damaged or altered backup)", e.name));
+            }
+            let blob = file.slice_with_f64_and_f64(start as f64, end as f64).map_err(|e| format!("{e:?}"))?;
+            backend.write_original_blob(&key, &blob).await.map_err(|err| format!("storing {}: {err}", e.name))?;
+            written += 1;
+            continue;
         }
+        let data = read_range(&file, start, end).await?;
+        verify(e, &data)?;
         backend.write(&key, &data).await.map_err(|err| format!("storing {}: {err}", e.name))?;
         written += 1;
     }
@@ -239,7 +279,7 @@ pub async fn restore(file: web_sys::File, backend: Backend) -> Result<String, St
 }
 
 /// File ▸ Restore Library from Backup…: confirm, pick the zip, restore, reload.
-pub fn pick_and_restore(backend: Backend, before_reload: impl FnOnce() + 'static) {
+pub fn pick_and_restore(backend: Backend, activity: lightcraft_engine::activity::Activity, before_reload: impl FnOnce() + 'static) {
     let ok = confirm(
         "Restore a LightCraft library backup?\n\nThe backup becomes the library in this browser and the page reloads. \
          The current library is not deleted: it stays in browser storage.",
@@ -257,8 +297,10 @@ pub fn pick_and_restore(backend: Backend, before_reload: impl FnOnce() + 'static
         let Some(file) = inp.files().and_then(|f| f.get(0)) else { return };
         let backend = backend.clone();
         let before = before_reload.take();
-        notice(format!("Restoring {}…", file.name()));
+        let guard = activity.start("restore", "Restoring library", lightcraft_engine::activity::Cancel::No);
+        guard.detail(&file.name());
         wasm_bindgen_futures::spawn_local(async move {
+            let _guard = guard;
             match restore(file, backend).await {
                 Ok(_) => {
                     if let Some(f) = before {

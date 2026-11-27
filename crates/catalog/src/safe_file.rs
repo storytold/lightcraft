@@ -170,9 +170,39 @@ pub fn write_atomic_nosync(path: &Path, data: &[u8]) -> io::Result<()> {
     replace_with(path, false, &mut |w| w.write_all(data)).map(|_| ())
 }
 
+/// [`write_atomic_nosync`] with streamed content; a failed copy never replaces the target.
+pub fn write_atomic_nosync_with(path: &Path, fill: &mut dyn FnMut(&mut dyn Write) -> io::Result<()>) -> io::Result<u64> {
+    replace_with(path, false, fill)
+}
+
+/// [`write_atomic_nosync_with`], with `check` run on the complete temporary file before it is
+/// renamed over the target: an error removes the temp file and leaves any previous file intact.
+pub fn write_atomic_nosync_with_check(
+    path: &Path,
+    fill: &mut dyn FnMut(&mut dyn Write) -> io::Result<()>,
+    check: &mut dyn FnMut(&Path) -> io::Result<()>,
+) -> io::Result<u64> {
+    replace_with_checked(path, false, fill, Some(check))
+}
+
 /// Temp file (synced when `sync`) renamed over `path`, then the folder synced when `sync`.
 fn replace_with(path: &Path, sync: bool, fill: &mut dyn FnMut(&mut dyn Write) -> io::Result<()>) -> io::Result<u64> {
+    replace_with_checked(path, sync, fill, None)
+}
+
+fn replace_with_checked(
+    path: &Path,
+    sync: bool,
+    fill: &mut dyn FnMut(&mut dyn Write) -> io::Result<()>,
+    check: Option<&mut dyn FnMut(&Path) -> io::Result<()>>,
+) -> io::Result<u64> {
     let (tmp, n) = write_temp(path, sync, fill)?;
+    if let Some(check) = check
+        && let Err(e) = check(&tmp)
+    {
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
+    }
     if let Err(e) = fs::rename(&tmp, path) {
         let _ = fs::remove_file(&tmp);
         return Err(e);

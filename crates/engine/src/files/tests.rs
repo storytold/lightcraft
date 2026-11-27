@@ -1,3 +1,41 @@
+/// A same-length rewrite is still a change: the probe's modification-time check sees it even when
+/// the file size and byte count match.
+#[test]
+fn a_same_length_rewrite_changes_the_probe_verdict() {
+    use std::time::{Duration, SystemTime};
+    let dir = std::env::temp_dir().join(format!("lightcraft-probe-mtime-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("clip.mp4");
+    std::fs::write(&path, b"0123456789abcdef").unwrap();
+    let before = std::fs::metadata(&path).unwrap();
+    std::fs::write(&path, b"fedcba9876543210").unwrap();
+    // Force a distinct mtime so the test does not depend on the filesystem's timestamp granularity.
+    let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+    let later = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+    file.set_times(std::fs::FileTimes::new().set_modified(later)).unwrap();
+    let after = std::fs::metadata(&path).unwrap();
+    assert!(super::fs::changed_while_hashing(&before, &after, 16, 16), "the rewrite is seen");
+    assert!(!super::fs::changed_while_hashing(&after, &after, 16, 16), "an unchanged file passes");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn original_buffers_use_platform_capacity_and_physical_ram_not_cache_budgets() {
+    use super::check_original_buffer_capacity;
+    let large = 257 << 20;
+    assert!(check_original_buffer_capacity(large, Some(512 << 20)).is_ok());
+    assert!(check_original_buffer_capacity(512 << 20, Some(512 << 20)).is_ok());
+    let error = check_original_buffer_capacity((512 << 20) + 1, Some(512 << 20)).unwrap_err();
+    assert!(error.contains("physical RAM") && !error.contains("app.memoryBudget"), "{error}");
+    assert!(check_original_buffer_capacity(large, None).is_ok());
+    assert!(check_original_buffer_capacity(0, Some(0)).is_ok());
+    assert!(check_original_buffer_capacity(isize::MAX as u64, None).is_ok());
+    assert!(check_original_buffer_capacity(isize::MAX as u64 + 1, None).is_err());
+    assert!(check_original_buffer_capacity(u64::MAX, None).is_err());
+    let above_cache_budget = crate::memory::budget() as u64 + 1;
+    assert!(super::check_buffered_original_size(above_cache_budget).is_ok());
+}
+
 /// Keywords from a file keep their hierarchy: the paths of `lr:hierarchicalSubject`, not the
 /// flat names of `dc:subject` that LightCraft's exports (and Lightroom Classic) write besides
 /// them; an exported `travel|Italy|Rome` comes back as itself.

@@ -228,6 +228,7 @@ fn the_preview_pill_keeps_its_word_on_a_short_photo_with_no_marks() {
         content_hash: p.content_hash.clone(),
         preview_only: Some("Cr3 files are not decoded yet".into()),
         preview_checked: "0.5.0".into(),
+        duration: p.duration,
     };
     h.app.session.catalog.apply(op).unwrap();
     // Let every render already under way finish first. The photo's thumbnail was requested on the

@@ -632,6 +632,7 @@ fn forget_sizes_and_contents(s: &mut Session) {
             content_hash: None,
             preview_only: None,
             preview_checked: String::new(),
+            duration: p.duration,
         })
         .collect();
     s.commit("Forget", Op::Batch { ops }).unwrap();

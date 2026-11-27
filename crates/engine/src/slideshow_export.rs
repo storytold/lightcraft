@@ -320,6 +320,10 @@ pub fn prepare(s: &mut Session, p: &Value) -> Result<Prepared, String> {
         };
         let aspect = s.slide_photo_aspect(id).unwrap_or(1.5);
         let (pw, ph) = lightcraft_slideshow::photo_size(&layout, aspect, width, height);
+        if photo.is_video() {
+            warnings.push(format!("{}: a video (no frame to show yet); skipped", photo.file_name));
+            continue;
+        }
         let job = match s.export_job(id, pw.max(8), ph.max(8), OutputSpace::Srgb, OutputDepth::U8) {
             Ok(job) => job,
             Err(e) => {

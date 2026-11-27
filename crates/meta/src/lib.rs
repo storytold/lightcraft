@@ -19,16 +19,36 @@ mod exif;
 pub mod focus;
 pub mod heif;
 mod iptc;
+mod jpeg_ext;
 pub mod mrw;
 mod psd;
+pub mod video;
 mod xmp;
 
 pub use craft_metadata::DateTime;
 pub use craft_metadata::cr3;
-pub use craft_metadata::{Embedded, jpeg_segments, png_chunks, webp_chunks};
 pub use craft_metadata::{Flash, Gps, RegionKind};
 pub use craft_metadata::{GpxError, Match, TrackPoint, Tracklog, parse_gpx};
 pub use craft_metadata::{TagRow, tag_rows};
+pub use craft_metadata::{jpeg_segments, png_chunks, webp_chunks};
+pub use jpeg_ext::jpeg_extended_xmp_guid;
+
+/// Metadata blocks found in a file.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Embedded {
+    /// TIFF-structured Exif block (without the `Exif\0\0` prefix).
+    pub exif: Option<Vec<u8>>,
+    /// XMP packet (the main one; extended XMP is appended by [`Embedded::xmp_extended`]).
+    pub xmp: Option<String>,
+    /// Extended XMP (JPEG only), reassembled.
+    pub xmp_extended: Option<String>,
+    /// The GUID every Extended XMP segment carries, set only when all segments share it and
+    /// their chunks tile exactly the full length they declare (no gap, overlap or excess).
+    pub xmp_extended_guid: Option<String>,
+    pub icc: Option<Vec<u8>>,
+    /// IPTC-IIM stream.
+    pub iptc: Option<Vec<u8>>,
+}
 
 /// Collect all EXIF/TIFF tag rows from a file (including PSD/PSB and HEIF containers).
 pub fn file_tag_rows(bytes: &[u8]) -> Vec<TagRow> {
@@ -48,12 +68,18 @@ pub fn embedded(bytes: &[u8]) -> Embedded {
     if heif::is_heif(bytes) {
         return heif::metadata(bytes);
     }
-    craft_metadata::embedded(bytes)
+    if let Some(xmp) = crate::video::extract_video_xmp(bytes) {
+        return Embedded { xmp: Some(xmp), ..Default::default() };
+    }
+    let e = craft_metadata::embedded(bytes);
+    let xmp_extended_guid = if e.xmp_extended.is_some() && bytes.starts_with(&[0xff, 0xd8]) { jpeg_extended_xmp_guid(bytes) } else { None };
+    Embedded { exif: e.exif, xmp: e.xmp, xmp_extended: e.xmp_extended, xmp_extended_guid, icc: e.icc, iptc: e.iptc }
 }
 pub use exif::{from_tiff, read_exif, strip_exif_header, try_read_exif, try_read_exif_with, write_exif};
 pub use focus::FocusPoint;
 pub use iptc::parse_iptc;
 pub use lightcraft_geom::{Orientation, Rect};
+pub use video::{VideoMeta, probe_video, verify_video_location_absent};
 pub use xmp::{CRS_NS, LC_NS, XmpData, XmpError, XmpValue, parse_xmp, write_xmp, write_xmp_lc};
 
 /// Which properties [`merge_xmp`] takes from the fresh packet.
@@ -425,7 +451,6 @@ fn has_location(metadata: &Metadata) -> bool {
 }
 
 /// Lenient number parsing used by XMP/IPTC: `"28/10"`, `"2.8"`, `"+0.7"`.
-#[cfg(test)]
 pub(crate) fn parse_number(s: &str) -> Option<f64> {
     let s = s.trim();
     if let Some((n, d)) = s.split_once('/') {

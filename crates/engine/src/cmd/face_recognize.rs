@@ -1057,6 +1057,7 @@ mod imp {
                 content_hash: Some("edited".into()),
                 preview_only: None,
                 preview_checked: String::new(),
+                duration: None,
             };
             s.commit("Reload Changed Files", replace).unwrap();
             assert!(s.faces.index.get(a.0, &rect).is_none() && !s.faces.scanned.contains(a.0), "the old file's faces are forgotten");
