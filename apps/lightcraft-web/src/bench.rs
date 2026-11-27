@@ -2,6 +2,9 @@
 //! control exactly like a slider drag (begin interaction → N `develop.set` → end) and time each
 //! step from the command to the moment the new loupe texture is ready. Results go to the log
 //! (the browser console on the web) as one `lightcraft-bench {…json…}` line.
+//!
+//! The web host runs it only on the generated demo photos in an unsaved library (`?bench` implies `?store=memory`): it
+//! commits edits to the photo it opens, which must never be one in the user's stored library.
 
 use lightcraft_ui_egui::LightcraftApp;
 use lightcraft_ui_egui::render::Slot;
@@ -39,7 +42,7 @@ pub struct Bench {
 }
 
 impl Bench {
-    /// `start_ms`: the page's time origin in the same clock as [`lightcraft_ui_egui::now_ms`].
+    /// `start_ms`: an origin on the same monotonic clock as [`lightcraft_ui_egui::monotonic_ms`].
     pub fn new(start_ms: f64) -> Self {
         Bench {
             phase: Phase::Idle,
@@ -54,13 +57,16 @@ impl Bench {
         }
     }
 
+    /// The render key of the main preview texture, or `None` while that slot holds no texture.
+    /// A changed key means the benchmark's requested main-image render has arrived.
     fn main_key(app: &LightcraftApp) -> Option<u64> {
         app.renderer.textures.get(&Slot::Main).map(|t| t.key)
     }
 
-    /// Call once per frame after `LightcraftApp::logic`. Returns the report when finished.
+    /// Call once per root UI pass after `LightcraftApp::ui` (a UI-phase step, never a hidden tick).
+    /// Returns the report when finished.
     pub fn step(&mut self, app: &mut LightcraftApp) -> Option<Value> {
-        let now = lightcraft_ui_egui::now_ms();
+        let now = lightcraft_ui_egui::monotonic_ms();
         self.frames += 1;
         if self.first_frame_ms.is_none() && self.frames > 1 {
             self.first_frame_ms = Some(now - self.start_ms);

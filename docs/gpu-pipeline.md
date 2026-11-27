@@ -8,6 +8,11 @@ CPU fast guided-filter allocation measurements and reproduction commands are doc
 [guided-filter-memory.md](guided-filter-memory.md). That optimization retains the full-size base
 and does not change the GPU's coefficient buffers.
 
+Process V4's camera-look Contrast and Blacks share the CPU's generated lookup tables and
+ProPhoto matrices. `finish.wgsl::light_ops` applies them after V2's Whites tone curve and
+before the colour stage. Full frames and render windows use the same pointwise operators;
+see [calibrated Light operators](light-v3.md) for HDR rules and limits.
+
 Warped geometry uses a CPU-computed coverage bit mask for the source boundary.
 The CPU reference evaluates that boundary in double precision; GPU float
 rounding otherwise can turn a blank edge pixel into a photo pixel. The mask
@@ -49,6 +54,24 @@ Overrides (read once at launch):
 - `LIGHTCRAFT_GPU=0`: GPU rendering off for the process (the window is unaffected).
 - Both `LIGHTCRAFT_GPU=0` and `LIGHTCRAFT_GPU_BACKEND=off` also keep AI Denoise, the face models
   and the AI mask model (SAM 3 on Metal) on the CPU.
+- `LIGHTCRAFT_GPU_ADAPTER=<part of a card's name>` (any case, e.g. `4070`, `radeon`, `"rtx 4070 super"`):
+  the graphics card for GPU rendering, AI Denoise and the face models, on a machine with more than one
+  (`backend::pick_adapter`). Of the hardware cards whose name contains it, the one whose whole name it
+  is wins, then dedicated before built-in before virtual cards, then wgpu's order
+  (`backend::choose_named_adapter`); the log says which when several match (`… matches 2 graphics
+  cards (…): using …`). Software renderers (WARP, llvmpipe) never: a name that matches only one is
+  logged as such. A name that matches no card is logged
+  (`gpu: LIGHTCRAFT_GPU_ADAPTER=… names none of the graphics cards (…); using the default choice`) and
+  the default high-performance card is used. Each line is logged once, though the render device, AI
+  Denoise and the face models each ask. Each of those makes its own wgpu instance and device, so
+  devices on different cards share no buffer, pipeline or queue. The window keeps the card wgpu picks for it by power preference, and
+  rendering runs on a device of its own on the chosen card (the photo is copied to the window's card).
+  Rendering shares the window's device when the variable is unset or names the window's card
+  (`backend::may_adopt_window_device`). The log's `gpu: LIGHTCRAFT_GPU_ADAPTER=…: using …` line names the card
+  used. Handy to keep test runs or a long export off the card the screens hang on.
+- `LIGHTCRAFT_GPU_ALLOW_SOFTWARE=1`: accept a software adapter (llvmpipe / lavapipe, WARP), which is
+  otherwise refused because the CPU pipeline is faster. For running the GPU tests on a machine
+  without a GPU (below); the app never sets it.
 
 **DX12 shader compiler (issue #471).** Every instance (window and compute) compiles DX12 shaders with
 FXC (`d3dcompiler_47.dll`, part of Windows; `lightcraft_gpu::backend::backend_options`). wgpu's
@@ -67,6 +90,14 @@ shifted; DXC and Vulkan were right), so `nn_conv.wgsl` steps those stores by `1 
 leaves them apart. The transposed convolution's merged store ran right on that card, but it steps the same way.
 `nn::tests::a_layer_stores_every_pixels_channels_where_the_next_reads_them` catches the fault on such a card;
 `a_transposed_convolution_stores_every_pixels_channels_where_the_next_reads_them` checks the other store exactly.
+
+FXC also cannot address two things the WGSL looks harmless with, and answers with `X3550 … forcing loop to unroll`
+and then `X3511 unable to unroll loop` (the shader module fails, so the pipeline is never made): an array handed to a
+function through a pointer (`ptr<function, array<…>>`) that the function then indexes with a loop variable, and a vector
+indexed with a loop variable on the left of an assignment (`acc[ch] = …` with `acc: vec4<f32>`). The block-matching
+kernels (`wgsl/bm3d_*.wgsl`) keep their working arrays at module scope (`var<private>`, one copy of the transforms
+generated per array, `bm3d_transform.wgsl`) and accumulate in `array<f32, 4>` instead. A GPU test that only records a
+skip when the device cannot build the kernels hides this, so read the skip note (`cargo test … -- --nocapture`).
 
 **Off the startup path.** The compute device is created on a background thread once the window is
 up (`gpu::warm_up` from the first frame's settings), and never while GPU rendering is off: with
@@ -113,6 +144,15 @@ renderer last. `LIGHTCRAFT_GPU_BACKEND=dx12 | vulkan | gl | glow` (or `WGPU_BACK
 first because a broken Vulkan driver can crash the process uncatchably (#136). Compute keeps its own
 device and falls back to the CPU as before.
 
+**The window's surface: one frame in flight.** The window's wgpu options start from eframe's defaults
+(`NativeOptions::default().wgpu_options`, `window_gpu::base_options`), whose surface is egui-wgpu's
+`SurfaceConfig::LOW_LATENCY`: vsync, at most one frame queued ahead of the display (two drawables on
+Metal). egui-wgpu's bare `WgpuConfiguration::default()` is `HIGH_THROUGHPUT` (two frames queued, three
+drawables), and the window used it from #136 until this change, so a drag reached the screen one frame
+(8.3 ms at 120 Hz, 16.7 ms at 60 Hz) later. The window's own GPU work is small (egui's meshes and
+texture uploads; renders run on the compute device), which is what `LOW_LATENCY` is meant for.
+During a live window resize egui-wgpu still uses three drawables on macOS.
+
 **Troubleshooting a crash at startup (Windows).** Start LightCraft from a `.cmd` file or a terminal
 with `set LIGHTCRAFT_GPU_BACKEND=dx12` (the default since #136), or `=off` to keep the GPU out of
 rendering; `set VK_LOADER_DRIVERS_DISABLE=*igvk64*` (Vulkan loader) hides a specific Vulkan driver
@@ -140,7 +180,22 @@ walks the drive.
 ## Where it is used
 - `lightcraft_engine::media::develop` (called by every `RenderJob`): loupe / before / compare views,
   `render_now` (CLI, MCP, control channel renders) and exports render on the GPU when one is
-  available; grid/filmstrip thumbnails (many small jobs in parallel) stay on the CPU.
+  available. Thumbnails (grid, filmstrip, preset and profile previews, faces) render on the GPU
+  once the device is ready (`lightcraft_gpu::ready()`) and on the CPU until then, so they never
+  wait for device creation at startup. Six workers rendering 256 px thumbnails: 3.6 ms each on an
+  RTX 5070 vs 4.3–5.2 ms on 32 CPU threads (`crates/gpu/tests/it/thumbs_bench.rs`), and the cores stay
+  free for raw decoding.
+- 8-bit renders take the GPU path with LUT profiles (the `.cube` table rides in the kernel's
+  `aux` buffer, trilinear like `Lut3d::apply`, after grain), masks with Refine Edges (the cross
+  guided filter of Auto Mask, blended by √refine before the mask's invert and amount) and soft
+  proofs into a colour space (proof-space gamut mapping and both gamut warnings, into an output
+  space or a display). The float HDR render (`OutputDepth::F32Hdr`) takes the GPU path too: the
+  `finish` kernel keeps values up to the edit's peak, encodes with the exact sRGB curve and writes
+  three linear floats per pixel into `out` (within 1 step of 8 on the sRGB curve of the CPU's float
+  render, 0.02 on average: `hdr_float_render_matches`). These render on the CPU: 16-bit and linear float exports,
+  Visualize HDR (it draws the float render over the 8-bit one), soft proofs to an output device's
+  profile (a printer or paper profile), and photos with a content-aware Fill spot (no GPU kernel
+  for it).
 - Anything the GPU path cannot do returns `None` and the CPU renders instead: no adapter (CI
   machines, software-only adapters), `LIGHTCRAFT_GPU=0` or `LIGHTCRAFT_GPU_BACKEND=off` (whole
   process; see [Backends](#backends-environment-variables-and-troubleshooting-issue-136)), the `app.gpu {enabled}`
@@ -166,10 +221,17 @@ walks the drive.
   (log luminance, dark channel, guided-filter steps, white balance, luminance / colour NR, airlight
   sampling), `mask` (linear / radial / luminance / colour range / brush shapes, combine, finalize),
   `finish` (the whole per-pixel stage) — each mirrors a named CPU function.
+- Defringe (`fringe_lab`, a separable lightness `minmax` filter, `fringe_apply`; parameters from
+  `optics::defringe_params`) and spot removal (`spot` module, spot by spot in place: `spot_prep`,
+  the Heal tone correction as two device Gaussians, `spot_apply`; Remove's 48 candidate sources are
+  scored by `spot_score` and only the scores are read back; layout and candidates from
+  `spots::{layout, candidates, ring_dirs, score_radii, rank}`) run on the device in `lin_cpu`'s
+  order. The histogram is counted on the device (`hist`, atomics, the same sampling grid as
+  `Histogram::of_srgb8`, so it is exact).
 - Soft proofing against an output space (`RenderRequest::proof`, with its destination and display gamut
   warnings) runs in `finish`; a proof against an output-device profile (its 3D table) renders on the CPU.
-- Per-stage hybrid: defringe and spot removal (rare, CPU-only for now) download the resampled image,
-  run on the CPU and upload; heuristic mask shapes (Sky, Subject, Background, …) and brushes of more
+- Per-stage hybrid: the camera's local tone mapping (ProRAW gain tables, off by default) runs the
+  scene-linear stage on the CPU and uploads; heuristic mask shapes (Sky, Subject, Background, …) and brushes of more
   than 4096 dabs are evaluated on the CPU and uploaded; sources over the buffer limit are resampled
   on the CPU.
 - Stage cache: `GpuStages` mirrors `StageCache` (same keys: source identity + `geo`, `lin_key`,
@@ -235,7 +297,8 @@ thread. A render's *own* reason comes from `lightcraft_gpu::try_render` (`Err(Fa
 passes on as `RenderResult::gpu_fallback`; an export carries it as `Exported::gpu_fallback`, and
 each file of an `app.export` batch result has `gpuFallback` when its render fell back (issue #675).
 **Reproducing a smaller GPU:** `LIGHTCRAFT_GPU_LIMITS=webgpu` (or `downlevel`) creates the device
-with 128 MiB storage bindings / 256 MiB buffers, `LIGHTCRAFT_GPU_LIMITS=<n>` with n MiB / 2n MiB.
+with 128 MiB storage bindings / 256 MiB buffers, `LIGHTCRAFT_GPU_LIMITS=<n>` with n MiB / 2n MiB;
+the window's device, when adopted, is capped the same way.
 Tests inject failures with `lightcraft_gpu::inject_fault` (`crates/gpu/tests/it/fallback.rs`,
 `export_falls_back_to_the_cpu_when_gpu_work_is_lost`). The fault is thread-local, and so are its
 consequences: a simulated fatal failure stops GPU use on the injecting thread only (`available()`
@@ -247,7 +310,7 @@ real failure still stops the whole process. Such a test asserts on its own rende
 `crates/gpu/tests/it/equivalence.rs` renders the same settings on both and compares 8-bit sRGB:
 bounds **mean |Δ| < 0.5 LSB and max |Δ| ≤ 3 LSB** per channel. Measured (Apple M4 Pro, Metal):
 **max 1 LSB, mean ≤ 0.0003 LSB** for every case — 26 settings cases (all tone/colour/effects tools,
-3 vignette styles, grain, curves, grading, B&W, WB, NR, crop/straighten/flip, lens + perspective,
+3 vignette styles, grain (value noise and crystal layers), curves, grading, B&W, WB, NR, crop/straighten/flip, lens + perspective,
 three mask sets incl. CPU-evaluated shapes, spots + defringe), all 8 orientations ± crop, embedded
 DNG lens data, display-referred sources, draft quality, full-size renders; the 24 MP export in
 `render_bench` also differs by max 1 LSB. Cached (slider-drag) GPU renders are bit-identical to
@@ -262,6 +325,32 @@ non-Apple GPU verified: all 16 tests pass, 135 compared cases. 124 differ by max
 bit-identical, and one (the point colour range overlay) has max 2 LSB on 0.0002% of pixels. Worst
 mean 0.0003 LSB. That is the same picture as on Metal, inside the bounds
 (`cargo test -p lightcraft-gpu --release --test it equivalence:: -- --nocapture`).
+
+**Running them without a GPU (issue #1050).** `Gpu::new` turns down software adapters, so on a
+machine without a hardware GPU (a VM, a container) every GPU test skips.
+`LIGHTCRAFT_GPU_ALLOW_SOFTWARE=1` lets them through for one run (tests only: the app never sets it):
+
+```sh
+log="$(mktemp -d)/gpu-skips.jsonl"   # a new private directory; an absolute path, as tests run in crates/gpu
+LIGHTCRAFT_GPU_ALLOW_SOFTWARE=1 LIGHTCRAFT_SKIP_LOG="$log" cargo test -p lightcraft-gpu --tests
+grep '"need":"gpu"' "$log" | grep -v -e 'lost on purpose' -e 'memory never ran out'   # no output: only the two below skipped
+```
+
+- **Linux:** Mesa's lavapipe (Vulkan; `mesa-vulkan-drivers` on Debian and Ubuntu). Its storage
+  bindings stop at 128 MiB (the WebGPU default), so the two big-source tests use a 117 MiB source:
+  above what a view keeps with its stages (96 MiB) and small enough to be uploaded there.
+- **Windows:** WARP, the DX12 software rasterizer that ships with Windows (shaders through FXC, as
+  above).
+- **macOS:** Metal is a hardware adapter, so the tests run without the variable.
+
+A machine with a hardware GPU picks it over the software adapter, variable or not. Each test that
+skips prints `skipped (gpu): …` and appends a line to the `LIGHTCRAFT_SKIP_LOG` file; with a software
+adapter the only ones left should be the device-loss test (`no GPU device, or one that can't be lost on
+purpose here`) and the device-memory test (`no GPU device, or its memory never ran out`: on lavapipe its
+allocations never fail, seen 2026-10-31). Measured 2026-10-11 on lavapipe and WARP, and again 2026-10-30 on lavapipe (Mesa's
+llvmpipe on LLVM 20, 143 compared renders), every compared render stayed within **max 1 LSB, mean ≤
+0.0003 LSB**, as on the M4 Pro. The equivalence binary takes about 20 s on lavapipe and several
+minutes on WARP.
 
 Remaining differences come from f32 vs f64 coordinate math, fast-math transcendental functions on
 Metal and summation order in the box filters — all far below one 8-bit step.
@@ -302,15 +391,63 @@ compilation: ~0.4 s once per process — the desktop app starts it on a backgrou
 (`lightcraft_gpu::warm_up`), so the first loupe render doesn't wait for it; other processes create
 the device on their first GPU render. `lightcraft_gpu::ready()` asks without blocking.
 
+On Windows / DX12 the kernels cost more: FXC compiles each pipeline single-threaded inside
+`create_compute_pipeline` (issue #471). Built one after another, the 27 took ~2.2 s on an Intel Core
+Ultra 7 165U iGPU (`app.gpu` 2.4 s median, up to 7 s on the first run after an install), so
+`ctx::build_kernels` shares them out to worker threads (issue #2936): ~1.05 s there (`app.gpu` 1.2 s),
+most likely the largest kernel (`finish.wgsl`) alone (not timed per kernel). wgpu's error scopes are per thread, so every worker
+opens its own; a refused kernel still means no GPU. The `gpu:` info log line gives the kernel count
+and build time.
+
+## Drawing renders straight from the GPU
+The desktop app creates the window's wgpu device with the adapter's limits and hands it to the GPU
+renderer (`lightcraft_gpu::adopt_window_device`, on a background thread at startup: the kernels
+build there; the crash sentinel covers it), so rendering and drawing share one device. A slider
+drag's drafts of the views (Detail, Before, the zoomed window, hover, Compare, the second window)
+are then marked `RenderJob::on_screen`: the render ends in an `Rgba8Unorm` texture
+(`lightcraft_gpu::render_display` → `Output::Display`) that egui-wgpu draws as a native texture
+(`ScreenTextures` in `ui-egui`, implemented by the app) - no readback, no conversion to egui's
+pixels, no re-upload. The per-render checks run on the device instead: every pixel written (an
+atomic count), not entirely black (the device histogram). Rows are re-laid at a 256-byte stride
+for the texture copy when the width needs it.
+
+Renders that need pixels keep the readback: the settled full-quality render after a drag (the cached
+view preview, overlays, screenshots), thumbnails, exports, overlays (Visualize Spots, mask
+overlays), windows that spots grew (cut on the CPU), a monitor profile (corrected on the CPU), and
+anything the GPU path declines. A device that doesn't suit (software adapter, too few storage
+buffers, kernels that don't build there) makes the renderer create a device of its own, as before.
+A headless `ui.screenshot` (the control channel keeps CPU copies of what is drawn) taken while a
+view shows a GPU-resident draft reads that texture back for the picture (`ScreenTextures::read`,
+`lightcraft_gpu::read_texture`); drawing never does.
+
+- `LIGHTCRAFT_GPU_WINDOW=0`: never adopt the window's device (a device of its own, renders read
+  back) - to compare, or for a driver that misbehaves with compute and drawing on one device.
+- `ui.inspect` → `perf.gpuWindowDevice` (renders run on the window's device), `perf.screenTextures`
+  (the UI can draw GPU-resident renders), `perf.mainOnGpu` (the loupe shows one now).
+- Measured (RTX 5070, DX12, a 45 MP CR3, 90 exposure steps of a drag at 30 Hz): the loupe's draft
+  render 1.69 ms median from the texture vs 2.05 ms with the readback; the UI thread unchanged
+  within noise (~1 ms). The difference grows with the loupe's size (4K/5K displays, zoom).
+- With the renderer on the window's device, errors the device raises outside a render (the window's
+  own included) are logged and stop GPU rendering (CPU from then on) instead of wgpu's default
+  panic.
+
 ## Opening a photo (M5.4)
 - The loupe shows a stand-in at once (`media::QuickJob`): the photo's cached view render for its
   current settings, else (raws with their import look) the embedded camera JPEG, else a
   thumbnail-level render; the full render replaces it in place.
 - Raw sources for previews (2560 px) and thumbnails are binned straight from the mosaic
-  (`RawImage::develop_binned`, 2× for a 24 MP preview); only exports / 1:1 demosaic at full size.
+  (`RawImage::develop_binned`, 2× for a 24 MP preview); exports / 1:1, and previews `files::bin_factor` can't bin
+  (Bayer sensors under about 4600 px on the long side, X-Trans under about 5760 px, such as 16 MP X-Trans), demosaic
+  at full size, on the CPU, with the mosaic white balanced as shot (`RawImage::develop_balanced_masked`, issue #1328).
+  The GPU starts from the decoded source either way.
 - The next and previous photos in filmstrip order are prepared in the background once the current
   one is rendered (decoded source kept, view render cached): stepping through photos shows the
   developed image in ~50 ms.
+- Culling (PERF-CULL): the stand-ins of the next five photos in the direction of travel and the one
+  behind are made ahead (`render::Slot::QuickAhead`) and taken over at the step, so a step shows
+  the camera JPEG at once; while an arrow key is held (a photo left within 0.25 s) the raw render
+  of a photo waits until it has stayed 0.12 s, and a render queued for a photo already left is
+  dropped. `ui.inspect` → `perf.loupeSteps` times each step on the frames drawn.
 
 ## Memory (M5.6)
 A view's stages keep an uploaded source only up to 96 MB (a Preview-level source); a bigger one (the original a zoom window is cut from) is kept once, outside the views' stages, for all views of the photo (the Before and After windows and every pan share it; the Before window of a Before/After waits at first open until the After's job has handed the original over, or each would decode and upload its own copy) and given back when the app idles with no zoom window on screen (a zoomed view keeps it for its next pan: a 64 MP original is 800 MB to upload again; issue #323: kept per view it counted against the stage budget on every tick of a drag, and not kept every new window uploaded 288 MB again).
@@ -342,11 +479,179 @@ A view's stages keep an uploaded source only up to 96 MB (a Preview-level source
 - Result (M4 Pro, 14 raws, loupe, 12 steps): peak RSS 1.9–2.3 GB → 0.83–0.99 GB, peak footprint
   2.5–2.6 GB → 0.91–0.96 GB, heap peak 930 → ~600 MB; stepping median ~13 ms (unchanged).
 
+## SAM 3 backbone (M12)
+AI masks (Object, Subject, Describe) spend almost all of their time in SAM 3's vision backbone, a 32-layer ViT
+(`crates/segment/src/vit.rs`, ~4.6 TFLOP plus attention per photo): ~37–40 s on the CPU through candle. With the
+`sam` feature, `lightcraft_gpu::sam3::backbone(&WeightReader)` runs it with wgpu compute kernels instead and returns
+a `lightcraft_segment::BackboneAccel` for `Sam3::load_accelerated`; the heads stay on candle (the necks: below). It has a
+device of its own (like denoise and faces) with the same switches, crash sentinel, shutdown gate and
+stop-after-a-device-error handling; any failure is an `Err` and the candle backbone runs instead.
+- Same math as `vit.rs`: patch embedding (im2col + matrix product, 24 × 24 position table tiled), `ln_pre`, then per
+  layer LN → one q|k|v product (the three weights concatenated) → 2-D RoPE (`rope_tables`, recomputed bit for bit)
+  → attention over 24 × 24 windows, or all 5184 tokens in layers 7/15/23/31 → output projection + residual → LN →
+  MLP 1024 → 4736 → 1024 with GELU (erf form; A&S 7.1.26, |error| < 1.5e-7) + residual.
+- Tokens stay in *window order* (window-major, row-major inside a window) from the patch embedding to the last
+  layer: a window is a contiguous range of keys, the position table repeats per window (a bias table indexed by
+  row % 576), and global attention does not depend on order (its RoPE table is stored in window order). The last
+  kernel writes the `[1024, 72, 72]` channels-first output.
+- Kernels (`wgsl/sam3_*.wgsl`): `sam3_matmul` (Y = X · Wᵀ with the checkpoint's `[N, K]` weights as they are,
+  64 × 64 tiles, 4 × 4 per thread, k in steps of 16 through padded workgroup memory, bias/GELU/residual in the
+  epilogue; written out per tile size with one variable per accumulator), `sam3_attention` (flash style: one query
+  per thread, keys and values 32 at a time through workgroup memory, online softmax; the 16 × 5184² scores of a
+  global layer never exist; also written out, since arrays indexed in loops spilled to local memory and ran 3.5 ×
+  slower), `sam3_ops` (layer norm, RoPE in place with the 1/8 scale folded into q, im2col, the final reorder). No
+  subgroups and no shader-f16 needed.
+- All 228 dispatches, their parameters (one uniform buffer) and bind groups are recorded once with the weights; a
+  forward pass writes the pixels, submits one command buffer per layer and reads the result back once.
+- Limits requested: WebGPU downlevel defaults plus 98 MB storage bindings / buffers (the MLP's activations,
+  5184 × 4736 floats) and 16 KB of workgroup memory. Device memory: 1.8 GB of f32 weights + 0.2 GB of work
+  buffers. When the f32 weights don't fit (out-of-memory while uploading), it retries with f16 weights (pairs
+  packed in u32, unpacked with `unpack2x16float`, products still in f32): 0.9 GB, but ~20 × the error (below).
+  An adapter short of a limit gets no device (`short_limits`, e.g. "max_storage_buffer_binding_size 67108864 <
+  98205696"), nor does one whose device creation fails or panics (the crash sentinel keeps a driver crash from
+  repeating on the next start); SAM 3 then runs in candle on the CPU, and `segment.model.status` → `backend.fallback`
+  and Settings ▸ Performance ▸ AI masks say why.
+- Measured (RTX 5070, Vulkan, `examples/sam3_backbone_bench.rs`): device + kernel compile 0.16–0.3 s (≈1 s with a
+  cold driver shader cache), weight upload 1.1 s, first forward 0.43–0.47 s, warm forward 0.43–0.44 s; candle on
+  the CPU 36–40 s. Matrix products ~13.5 TFLOP/s (~80 % of the time), attention ~12 TFLOP/s. f16 weights: 0.47 s
+  (no faster: the products are compute-bound), upload 2.9 s.
+- Accuracy (`tests/it/sam3_backbone.rs`, a photo with a Hugging Face reference from `tools/sam3_reference.py`): GPU vs
+  CPU backbone max abs 5.3e-2 at a scale of 223 (max rel 2.4e-4), mean abs 2.2e-5; against Hugging Face the GPU is
+  as close as the CPU port (max rel 1.4e-4 vs 2.0e-4). Click masks and a Describe mask ("person") from either
+  backbone: IoU 1.0. With f16 weights: max rel 3.8e-3, mean abs 5.4e-4, mask IoU ≥ 0.9997.
+- Tests: kernel unit tests against plain loops (`src/sam3/tests.rs`: cut-off tiles, K not a multiple of the tile,
+  windowed and global attention, LN, RoPE, im2col/reorder, f16 rounding), skipped without a GPU; the end-to-end
+  test runs with `LIGHTCRAFT_SAM3_DIR` set. Tested on NVIDIA (RTX 5070, Vulkan), Apple silicon (M4 Pro, Metal
+  through wgpu: first forward 3.1 s, CPU 17.2 s; max rel 4.9e-5, masks IoU ≥ 0.99992) and AMD (RX 7900 XTX on
+  Windows 11, DX12 and Vulkan, all four `sam3_` tests: backbone 0.46 s on DX12 and 0.51 s on Vulkan against 26 s in
+  candle on the CPU, max rel 4.3e-5 / 5.1e-5; on DX12 Describe, semantic and click masks IoU ≥ 0.9993). Intel is untested.
+
+### SAM 3 necks
+After the backbone, the click decoder needs the tracker neck (`tracker_neck`) and Describe the detector's
+(`detector_model.vision_encoder.neck`): the same `Sam3VisionNeck` (`crates/segment/src/neck.rs`) with other weights,
+three levels each (288², 144² and 72², 256 channels; the 36² level is used by neither head). In candle on the CPU
+they took ~2.3 and ~2.6 s per photo, more than the GPU backbone. `BackboneAccel::neck` runs them with the backbone's
+device (`crates/gpu/src/sam3/neck.rs`); `Sam3` turns the levels into candle tensors on its device, checks their
+sizes and values, and on any `Err` warns once and runs that neck in candle from then on (the other neck and the
+backbone stay on the GPU).
+- Images are pixel rows (`[pixels, channels]`), so every step is the backbone's matrix kernel. A 2 × 2 stride-2
+  transposed convolution is one product per input pixel, `[pixels, cin] · [cin, 4 · cout]` (PyTorch's
+  `[cin, cout, 2, 2]` weight laid out as `[(ky, kx, cout), cin]` on upload, the bias repeated 4 ×), GELU (erf)
+  between level 0's two in the epilogue. Its output rows hold each pixel's four outputs one after the other; `proj1`
+  (1 × 1) doesn't care about pixel order, so one reorder (`unshuffle` in `wgsl/sam3_neck.wgsl`) after it puts the
+  pixels of one or two up-samplings in row-major order.
+- `proj2` (3 × 3, padding 1) is an implicit GEMM: the matrix kernel with another A-tile loader
+  (`wgsl/sam3_conv.wgsl`, spliced in place of the dense one between `// #if dense` marks of `sam3_matmul.wgsl`) that
+  reads the 9 · 256 numbers of a pixel's neighbourhood straight from the image (K ordered tap-major, so each vec4 is
+  four channels of one pixel; zero outside). The im2col matrix (764 MB at 288²) never exists. The weights go to
+  `[cout, ky, kx, cin]` on upload. The last step is `to_chw` with one window over the whole image.
+- Built on first use, not with the backbone: the three kernels compile (≈0.2 s with a cold driver cache, a few ms
+  warm), the work buffers are made (pixel rows of the backbone, 21 MB, and two 85 MB buffers the steps alternate
+  between, shared by both necks), and the neck's weights (~27 MB) are read, laid out and uploaded (~0.1 s). Each
+  level is recorded once and is one submission with its own read-back (85 / 21 / 5 MB), so no buffer exceeds the
+  backbone's 98 MB limits and no limit is raised. Device memory: ~245 MB with both necks built.
+- Measured (RTX 5070, Vulkan, `examples/sam3_backbone_bench.rs`; `--app` times the app's per-photo steps,
+  `--cpu-necks` the same with candle's necks): a neck 38 ms warm (level 0: 13 ms of products at ~12 TFLOP/s, the
+  rest mostly the 85 MB read-back), first use 0.08–0.12 s (0.4 s with a cold driver shader cache); candle 2.3–3.5 s.
+  Per photo in the app's order: click features (the tracker neck plus the tracker's two 1 × 1 convolutions, still
+  candle) 0.11–0.19 s instead of 2.0–2.3 s, so encode + click features 0.56–0.69 s instead of 2.4–2.9 s; the first
+  Describe 5.1–5.8 s instead of 7.0–7.4 s (the rest of it is the DETR encoder and decoder in candle).
+- Accuracy (`tests/it/sam3_necks.rs`, both models fed the same GPU backbone output): every level of both necks within
+  max rel 2.1e-6, mean abs ≤ 7.7e-7 of candle; click and Describe masks IoU 1.0.
+- Tests: kernel unit tests against plain f64 loops (`src/sam3/neck/tests.rs`: transposed convolutions + reorder
+  with odd sides, the 3 × 3 convolution at every border, single-pixel and odd sizes, cut-off tiles, the weight
+  layouts, a whole small neck against a transcription of `Neck::forward`); `crates/segment` tests the fallback
+  (wrong sizes, NaN) with a fake accelerator.
+
+### SAM 3 DETR encoder
+Each text prompt (Describe; Subject's "person") runs the text detector (`crates/segment/src/detector.rs`), whose
+DETR encoder fuses the prompt into the 72 × 72 image tokens: ~4–5 s of the ~5–7 s a prompt took on the CPU. The
+same accelerator runs it (`BackboneAccel::detr_encoder`, `src/sam3/detr.rs`); `Detector::predict` uses its result
+as the encoder memory and runs the rest in candle. Any failure (no such accelerator, out of memory, a wrong-sized
+or non-finite result) is logged once and noted (`Sam3::detr_fallback`), and from then on candle runs the encoder
+for that model.
+- Same math as `detector.rs`, six layers over 5184 tokens of 256: LN (eps 1e-5, PyTorch's default) → self-attention
+  (8 heads of 32; q and k from the normed tokens plus their sine position encoding, v from the normed tokens; q | k
+  one product with the weights concatenated) → output projection + residual → LN → cross-attention to the prompt's
+  32 tokens (k | v one product) with the key-padding bias → output projection + residual → LN → MLP 256 → 2048 →
+  256 with ReLU + residual.
+- Kernels: the backbone's matrix product (ReLU as a third epilogue activation) and layer norm (with eps 1e-5), and
+  `wgsl/sam3_detr.wgsl`: attention for heads of 32 (flash style, written out like the backbone's) whose q, k and v
+  come from separate buffers with their own strides and offsets, with an optional per-key bias stored after the
+  prompt's k | v (0 or f32::MIN, as candle's `padding_bias`; the running maximum starts at f32::MIN, so a padded key
+  weighs exactly nothing and an all-padding prompt averages, as candle's softmax does); and a sum (tokens + position).
+- Loaded on the first prompt, not with the backbone: kernels, 38 MB of f32 weights, 80 MB of work buffers (model
+  load time and memory before the first Describe are unchanged). 84 dispatches, recorded once; a prompt writes the
+  tokens, their position encoding, the prompt's tokens and its padding bias, submits one command buffer per layer
+  and reads the memory back.
+- Measured (RTX 5070, Vulkan; CPU busy with parallel builds, load ~7–10): the encoder 23–25 ms with uploads and
+  read-back (self-attention 2.2 ms a layer at 12 TFLOP/s, products 10–12 TFLOP/s), candle 4.6–5.7 s (3.9–4.4 s on
+  an idle CPU). A Describe on a photo already analyzed (second prompt) 6.6 s → 2.0 s. What remains, per prompt:
+  CLIP text encoder 0.27–0.46 s, DETR decoder 0.75–1.3 s (of it the box relative-position bias ~75 ms a layer),
+  mask head ~0.9–1.4 s (pixel decoder 3 × 3 convs at 144² and 288² ~0.75–1.2 s, 1 × 1 instance projection 0.12 s,
+  mask products 25 ms; now on the GPU, below).
+- Accuracy (`tests/it/sam3_detr.rs`, the photo of `tools/sam3_reference.py`, prompts "person", "sky", "the red car";
+  both models share one GPU backbone, so only the encoder differs): memory max rel 1.7e-6–4.2e-6, mean abs
+  2.3e-6–7.7e-6; query logits max abs ≤ 2.5e-4; presence logits ≤ 2.3e-5 apart; boxes ≤ 1.2e-4; the same instances
+  and Describe mask IoU 1.0. Kernel unit tests (`src/sam3/detr/tests.rs`): self-attention with 8 × 32 heads and a
+  part-empty last workgroup, cross-attention to 32 keys with 0, 1, 5 and 32 real tokens, ReLU, the sum, the eps.
+
+### SAM 3 mask head
+A prompt's masks come from the detector's mask decoder (`mask_decoder` in the checkpoint): the encoder memory attends
+to the prompt (`prompt_cross_attn`, after its layer norm) and is added to it; the pixel decoder brings it from 72² to
+288² in two stages, each nearest 2 × up-sampling + the detector neck's level of that size → 3 × 3 convolution →
+GroupNorm (8 groups, eps 1e-5) → ReLU; the 1 × 1 instance projection follows, and each query's mask embedding (the
+`mask_embedder` MLP on the decoder's queries) times that is its mask logits. ~0.7–1.4 s per prompt in candle on the
+CPU, most of it the 288² convolution. `BackboneAccel::mask_decoder` runs it on the accelerator (`src/sam3/pixel.rs`);
+any failure (out of memory, a wrong-sized or non-finite result) is logged once and noted (`Sam3::mask_fallback`), and
+candle runs the decoder for that model from then on.
+- Interface: the encoder memory, the prompt's tokens and which are real, both neck levels (channels-first, as
+  `Features` holds them) and `rows` `[r, 256]` with a bias `[r]` (r ≤ 256), each row a 1 × 1 projection of the pixel
+  decoder's output; it returns `[r, 288, 288]`. The detector folds the instance projection into its 200 mask
+  embeddings on the CPU (e · (W x + b) = (e W) x + e b: 13 MFLOP instead of the projection's 11 GFLOP), so one
+  product `[82944, 256] · [200, 256]ᵀ` on the GPU gives the masks and the CPU fallback stays the candle code as it was.
+  SAM 3's semantic segmentation head (the semantic mask Describe and Subject share out to their instances, #1963) is
+  another 1 × 1 read-out of the same output, so it is one more row: 201 rows, the last one the semantic mask.
+- Kernels: the prompt attention is the DETR encoder's (torch-eps layer norm, products, attention with the padding
+  bias); the convolutions are the necks' implicit GEMM; `wgsl/sam3_pixel.wgsl` adds the up-sampling, which adds the
+  neck level as uploaded (channels-first, so no separate reorder), and GroupNorm + ReLU: two-pass statistics per
+  chunk of 256 pixels (thread = channel, so the loads are contiguous), merged per group with the parallel variance
+  formula, then normalized in place. The projection's `[pixels, r]` goes channels-first with `to_chw`.
+- Loaded on the first prompt, like the encoder: kernels, 6 MB of weights, 282 MB of work buffers (and an 85 MB
+  read-back buffer in host memory). 17 dispatches, recorded once per row count; a prompt uploads the memory (5 MB),
+  the prompt, both neck levels (106 MB) and the rows, submits once and reads `r · 288²` numbers back (66 MB).
+  Keeping the levels on the device after `BackboneAccel::neck` would save the 106 MB upload (a few ms) but needs an
+  image identity in the interface and another 106 MB of device memory per photo; not done.
+- Measured (RTX 5070, Vulkan, `examples/sam3_backbone_bench.rs`, quiet machine): the decoder 33 ms warm with the
+  uploads and the read-back (by FLOP count about a third of it kernels, the 288² convolution ~8 ms at ~12 TFLOP/s;
+  the rest transfers), first use 0.09–0.17 s. Per prompt in the app (`--app`, against `--cpu-masks`): a Describe on a
+  photo already analyzed 1.9–2.2 s → 1.04–1.06 s, the first on a photo 2.0–2.1 s → 1.11–1.12 s (2.5 s → 1.65 s with
+  the first load); under load (~15, parallel builds) 1.9 s → 1.1–1.2 s. With the CPU-side text cache and one-pass box
+  bias as well: a new prompt on an analyzed photo ~0.7 s, a prompt used before 0.45–0.46 s. What remains is in candle
+  on the CPU: the DETR decoder (~0.4 s) and, for a new prompt, the CLIP text encoder (~0.25 s).
+- Accuracy (`tests/it/sam3_mask_decoder.rs`; both models share one GPU accelerator, so only the mask decoder differs):
+  against the decoder transcribed with candle's tensor ops in f64, the GPU's instance features are within max rel
+  4.2e-6, mean abs 1.7e-7; candle's own f32 decoder is 1.1e-3–1.5e-3 / 2e-4 from it, all of that from its GroupNorm's
+  f32 sums over 2.6 M numbers per group (with those in f64 the f32 transcription is within 1.1e-6). So GPU vs candle,
+  all 200 queries' mask logits: max rel 1.0e-3–1.7e-3; the same instances, Describe mask IoU 1.0 ("person", "sky",
+  "the red car" on the photo of `tools/sam3_reference.py`). Kernel unit tests (`src/sam3/pixel/tests.rs`): the
+  up-sampling + level (odd sizes), GroupNorm + ReLU (cut-off chunks, a mean of 50, 1–8 groups), a two-stage small
+  decoder (up-sampling → convolution at every border → GroupNorm) against f64 loops, and the size checks.
+- Not done: masks only for the queries above the threshold (`merge` keeps sigmoid(logit) · sigmoid(presence) > 0.5).
+  `Sam3::detect` returns all 200 and the reference test (`crates/segment/tests/reference.rs`) checks the
+  best-scoring query's mask, which need not pass the threshold; with `rows` it is a matter of passing fewer of them.
+
+### SAM 3 on the GPU: device memory in all
+With every part on the GPU (after a photo's analysis and a first Describe): the backbone's 1.8 GB of f32 weights and
+0.2 GB of work buffers, both necks ~245 MB, the DETR encoder 38 MB of weights and 80 MB of work buffers, the mask
+decoder 6 MB and 282 MB: ~2.7 GB of device memory, ~1.8 GB when the backbone falls back to f16 weights. The parts
+after the backbone load on first use, each on its own; one that runs out of memory (or fails otherwise) stays in
+candle on the CPU from then on (`Sam3::detr_fallback`, `Sam3::mask_fallback`, the necks per kind) and the others stay
+on the GPU. Settings ▸ Performance ▸ AI masks ▸ Run on: CPU keeps all of it off the GPU.
+
 ## Open items
-- Keep the loupe texture on the GPU (render into an `egui-wgpu` texture on eframe's device instead of
-  reading back); share the device with eframe.
 - WebGPU in the browser build (async init, single device per canvas).
-- Defringe and spot removal kernels; Sky/Subject heuristics (replaced by the segmenter in M12).
+- Sky/Subject heuristics (replaced by the segmenter in M12); the ProRAW local tone map.
 - Tiling for sources / outputs beyond the buffer limit (24 MP+ on WebGPU-default limits, 60 MP+
   on most desktop adapters; these render on the CPU now): tile with overlap equal to the largest
   filter radius, with global values (airlight) from a first pass.
@@ -354,4 +659,3 @@ A view's stages keep an uploaded source only up to 96 MB (a Preview-level source
   faster path for exports.
 - Large-radius blurs at full size (dehaze dark channel at 24 MP) dominate the export: a summed-area
   table or a downsampled dark channel would cut them further.
-- GPU histogram (atomics) to skip the CPU pass over the readback.
