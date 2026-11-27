@@ -49,7 +49,7 @@ pub(crate) fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::
         pick_lightroom_catalog: Some(Box::new(|| {
             file_dialog()
                 .set_title(lightcraft_ui_egui::i18n::tr("Import Lightroom Catalog"))
-                .add_filter_nocase(lightcraft_ui_egui::i18n::tr("Lightroom Classic Catalog"), &["lrcat"])
+                .add_filter_nocase(lightcraft_ui_egui::i18n::tr("Lightroom Classic Catalog"), &["lrcat", "zip"])
                 .pick_file()
                 .map(|p| p.to_string_lossy().to_string())
         })),
@@ -145,6 +145,11 @@ pub(crate) fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::
         // macOS doesn't colour-manage the window: previews follow the screen's profile (#787)
         #[cfg(target_os = "macos")]
         screen_profile: Some(Box::new(screen_profile::icc)),
+        // Follow System Settings ▸ Accessibility ▸ Display ▸ Reduce motion until the user chooses
+        #[cfg(target_os = "macos")]
+        system_reduce_motion: Some(Box::new(reduce_motion::system)),
+        #[cfg(not(target_os = "macos"))]
+        system_reduce_motion: None,
         // Linux: the profile the desktop assigns in colord, read off the UI thread
         #[cfg(target_os = "linux")]
         screen_profile: Some(colord::service()),

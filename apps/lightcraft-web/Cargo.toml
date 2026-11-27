@@ -77,7 +77,7 @@ web-sys = { workspace = true, features = [
 ] }
 
 [features]
-# Open HEIC/HEIF photos (the optional lightcraft-heif crate). Not default so distributors choose
+# Open HEIC/HEIF photos (the optional craft-heif crate). Not default so distributors choose
 # it (HEVC patents); build with `--features heif` to include it. On wasm32 panics abort, so
 # heic-rs's `catch_unwind` guard does not apply there.
 heif = ["lightcraft-codecs/heif"]

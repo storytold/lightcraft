@@ -10,7 +10,7 @@
 //! photo has them, or given attributes ([`KeywordInfo`]: synonyms, export options, person). The
 //! tree is the keyword list together with the keywords photos carry.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -24,6 +24,13 @@ pub fn clean(k: &str) -> String {
     k.split(SEP).map(str::trim).filter(|s| !s.is_empty()).collect::<Vec<_>>().join("|")
 }
 
+/// No level of `k` ends in `*` (after trimming): a name a user gives can't end in an asterisk,
+/// which marks a keyword only some of the selected photos have. An asterisk inside a name (`a*b`)
+/// is allowed.
+pub fn valid_name(k: &str) -> bool {
+    !k.split(SEP).any(|level| level.trim().ends_with('*'))
+}
+
 /// The same name, whatever the case of any of its letters (not only ASCII ones).
 pub fn same(a: &str, b: &str) -> bool {
     a == b || a.to_lowercase() == b.to_lowercase()
@@ -33,6 +40,12 @@ pub fn same(a: &str, b: &str) -> bool {
 pub fn is_under(k: &str, parent: &str) -> bool {
     let (k, p) = (k.to_lowercase(), parent.to_lowercase());
     k == p || k.strip_prefix(&p).is_some_and(|rest| rest.starts_with(SEP))
+}
+
+/// The upper levels of a case folded keyword path, each as a prefix of it ending before a `|`
+/// (`a|b|c` gives `a`, `a|b`), the way [`is_under`] sees them.
+fn upper_levels(folded: &str) -> impl Iterator<Item = &str> {
+    folded.match_indices(SEP).map(|(i, _)| &folded[..i])
 }
 
 /// Replace the `from` prefix of `k` (which [`is_under`] `from`) with `to`. By levels, not bytes:
@@ -73,15 +86,37 @@ pub fn to_file(keywords: &[String]) -> FileKeywords {
 /// A file's keywords as a photo carries them: the paths of `lr:hierarchicalSubject`, then the
 /// names of `dc:subject` that aren't levels of those paths (Lightroom Classic writes each keyword's
 /// name, its parents' and synonyms flat besides its path). Each once, cleaned.
+///
+/// An entry holding several lines is several keywords: some cameras' metadata presets write the
+/// whole list as one `dc:subject` item, a keyword a line ("Beautiful Bride&#xD;&#xA; Bride and
+/// Groom…"). Read as one, it would be a single keyword many lines tall.
 pub fn from_file(flat: &[String], hierarchical: &[String]) -> Vec<String> {
-    let mut out: Vec<String> = hierarchical.iter().map(|k| clean(k)).collect();
+    let lines = |v: &[String]| -> Vec<String> { v.iter().flat_map(|k| split_lines(k)).collect() };
+    let (flat, hierarchical) = (lines(flat), lines(hierarchical));
+    let mut out: Vec<String> = hierarchical.iter().map(|k| clean(k)).filter(|k| !k.is_empty()).collect();
     // One lowered set of every hierarchical level, not a search of `hierarchical` for each flat
     // keyword: disjoint lists from sidecars made the old approach quadratic in both (CWE-407), and
     // `same` allocates two lower-cased strings per comparison.
     let levels: std::collections::HashSet<String> = hierarchical.iter().flat_map(|h| h.split(SEP).map(|l| l.trim().to_lowercase())).collect();
-    out.extend(flat.iter().map(|k| clean(k)).filter(|k| !levels.contains(&k.to_lowercase())));
+    out.extend(flat.iter().map(|k| clean(k)).filter(|k| !k.is_empty()).filter(|k| !levels.contains(&k.to_lowercase())));
     dedupe(&mut out);
     out
+}
+
+/// The keywords of one metadata entry: one a line (any of `\r`, `\n`, the Unicode line and
+/// paragraph separators), blank lines dropped.
+pub fn split_lines(k: &str) -> Vec<String> {
+    k.split(['\r', '\n', '\u{2028}', '\u{2029}']).map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect()
+}
+
+/// `text` on one line: line breaks become spaces (a name drawn in a row must never spill over
+/// the rows around it).
+pub fn one_line(text: &str) -> std::borrow::Cow<'_, str> {
+    if text.contains(['\r', '\n', '\u{2028}', '\u{2029}']) {
+        std::borrow::Cow::Owned(split_lines(text).join(" "))
+    } else {
+        std::borrow::Cow::Borrowed(text)
+    }
 }
 
 /// The deepest a keyword list file may nest keywords: a file is input, so its nesting is bounded.
@@ -459,6 +494,97 @@ impl Catalog {
         Ok(Op::Batch { ops })
     }
 
+    /// [`Self::delete_keyword_ops`] for several keywords at once: one batch, so one undo step.
+    /// Unlike one keyword (which may be absent and then changes nothing), every keyword named must
+    /// exist, or the whole batch is refused.
+    pub fn delete_keywords_ops(&self, keywords: &[String]) -> Result<Op> {
+        let gone: Vec<String> = keywords.iter().map(|k| clean(k)).collect();
+        if gone.is_empty() || gone.iter().any(String::is_empty) {
+            return Err(CatalogError::Invalid("empty keyword".into()));
+        }
+        // case folded once here, and each candidate once below, not once per pair
+        let folded: Vec<String> = gone.iter().map(|g| g.to_lowercase()).collect();
+        let under = |k: &str, p: &str| k == p || k.strip_prefix(p).is_some_and(|rest| rest.starts_with(SEP));
+        let mut found = vec![false; folded.len()];
+        let listed = self.keyword_list.values().map(|l| &l.path);
+        for k in listed.chain(self.photos().filter(|p| p.in_library()).flat_map(|p| p.meta.keywords.iter())) {
+            let k = k.to_lowercase();
+            for (hit, p) in found.iter_mut().zip(&folded) {
+                *hit |= under(&k, p);
+            }
+        }
+        if let Some(i) = found.iter().position(|hit| !hit) {
+            return Err(CatalogError::Invalid(format!("no keyword “{}”", gone[i])));
+        }
+        let goes = |k: &str| {
+            let k = k.to_lowercase();
+            folded.iter().any(|p| under(&k, p))
+        };
+        let mut ops = self.keyword_ops(|kws| kws.iter().filter(|x| !goes(x)).cloned().collect());
+        ops.extend(self.list_ops(|list| list.retain(|_, l| !goes(&l.path))));
+        Ok(Op::Batch { ops })
+    }
+
+    /// Move several keywords (each with the keywords below it) inside `parent`, or to the top
+    /// level (`None`), as one batch. Each keeps its name. Of a keyword and one below it only the
+    /// upper one moves (the lower goes with it). Nothing merges here: a name that is taken where
+    /// they go ([`CatalogError::KeywordExists`]), or two of them with one name, refuses the whole
+    /// move. Returns the batch and each move as `(from, to)`.
+    pub fn move_keywords_ops(&self, keywords: &[String], parent: Option<&str>) -> Result<(Op, Vec<(String, String)>)> {
+        // paths are case folded once and kept in sets: a batch of thousands stays linear
+        let mut from: Vec<String> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+        for k in keywords {
+            let path = self.keyword_path(k).ok_or_else(|| CatalogError::Invalid(format!("no keyword “{}”", clean(k))))?;
+            if seen.insert(path.to_lowercase()) {
+                from.push(path);
+            }
+        }
+        if from.is_empty() {
+            return Err(CatalogError::Invalid("no keyword to move".into()));
+        }
+        // the upper ones only: a keyword goes when one of its upper levels is named too
+        from.retain(|f| !upper_levels(&f.to_lowercase()).any(|up| seen.contains(up)));
+        let upper: HashSet<String> = from.iter().map(|f| f.to_lowercase()).collect();
+        let parent = parent.map(clean).filter(|p| !p.is_empty()).map(|p| self.keyword_path(&p).unwrap_or(p));
+        if let Some(p) = &parent {
+            let p = p.to_lowercase();
+            if upper.contains(&p) || upper_levels(&p).any(|up| upper.contains(up)) {
+                return Err(CatalogError::Invalid("can't move a keyword inside itself".into()));
+            }
+        }
+        let mut moves: Vec<(String, String)> = Vec::new();
+        let mut names: HashSet<String> = HashSet::new();
+        for f in &from {
+            let leaf = f.rsplit(SEP).next().unwrap_or(f);
+            let to = parent.as_deref().map_or_else(|| leaf.to_string(), |p| format!("{p}{SEP}{leaf}"));
+            if !names.insert(to.to_lowercase()) {
+                return Err(CatalogError::Invalid(format!("two of them are named “{leaf}”: move them one at a time")));
+            }
+            moves.push((f.clone(), to));
+        }
+        // one that is there already stays; the others must find their name free
+        moves.retain(|(f, t)| !same(f, t));
+        if let Some((_, taken)) = moves.iter().find(|(_, t)| self.has_keyword(t)) {
+            return Err(CatalogError::KeywordExists(taken.clone()));
+        }
+        // case folded once here and once per photo keyword, not once per pair
+        let folded_from: Vec<String> = moves.iter().map(|(f, _)| f.to_lowercase()).collect();
+        let moved = |k: &str| {
+            let k_folded = k.to_lowercase();
+            moves.iter().zip(&folded_from).find_map(|((f, t), f_folded)| {
+                let under = k_folded == *f_folded || k_folded.strip_prefix(f_folded.as_str()).is_some_and(|rest| rest.starts_with(SEP));
+                under.then(|| reparent(k, f, t))
+            })
+        };
+        let mut ops = self.keyword_ops(|kws| kws.iter().map(|k| moved(k).unwrap_or_else(|| k.clone())).collect());
+        // (the moves touch apart parts of the list: each one's listings are its own)
+        for (f, t) in &moves {
+            ops.extend(self.list_move_ops(std::slice::from_ref(f), t));
+        }
+        Ok((Op::Batch { ops }, moves))
+    }
+
     /// Merge several keywords (with their children) into `into`.
     pub fn merge_keywords_ops(&self, from: &[String], into: &str) -> Result<Op> {
         let into = clean(into);
@@ -691,6 +817,19 @@ impl Catalog {
         self.keyword_path(path).is_some()
     }
 
+    /// Refuse a keyword a user gives (a new keyword, a new name, a keyword typed for photos) when a
+    /// level the library doesn't have yet ends in `*` ([`valid_name`]). Levels the library has,
+    /// such as those read from sidecars and catalogs, are accepted as they are.
+    pub fn check_keyword_name(&self, path: &str) -> Result<()> {
+        let levels: Vec<&str> = path.split(SEP).map(str::trim).filter(|s| !s.is_empty()).collect();
+        for (i, level) in levels.iter().enumerate() {
+            if !valid_name(level) && !self.has_keyword(&levels.get(..=i).map(|l| l.join("|")).unwrap_or_default()) {
+                return Err(CatalogError::Invalid(format!("keyword names can't end in “*”: “{level}”")));
+            }
+        }
+        Ok(())
+    }
+
     /// Where a keyword typed for a photo goes: inside the default parent when it is a new name (Put
     /// New Keywords Inside This Keyword); a keyword the library has, or a path typed whole, as
     /// typed (cleaned).
@@ -795,6 +934,7 @@ impl Catalog {
         if self.has_keyword(&path) {
             return Err(CatalogError::KeywordExists(path));
         }
+        self.check_keyword_name(&path)?;
         let path = self.spelled(&path);
         let mut ops = vec![Op::SetKeyword { path: path.clone(), info: Some(info) }];
         for id in photos {
@@ -849,6 +989,7 @@ impl Catalog {
             if !same(&to, &from) && self.has_keyword(&to) {
                 return Err(CatalogError::KeywordExists(to));
             }
+            self.check_keyword_name(&to)?;
             if let Op::Batch { ops: renamed } = self.rename_keyword_ops(&from, &to)? {
                 ops = renamed;
             }
@@ -878,8 +1019,14 @@ impl Catalog {
     /// appear together with `current` on other photos, then the most used ones. Most frequent
     /// first, at most `n`, never one of `current`.
     pub fn keyword_suggestions(&self, current: &[String], prefix: &str, n: usize) -> Vec<String> {
+        self.keyword_suggestions_among(self.keywords(), current, prefix, n)
+    }
+
+    /// [`Self::keyword_suggestions`] from the photos' keywords and their counts as
+    /// [`Self::keywords`] gives them, for a caller that asks more than once of the same library.
+    pub fn keyword_suggestions_among(&self, keywords: Vec<(String, usize)>, current: &[String], prefix: &str, n: usize) -> Vec<String> {
         // the photos' keywords with their counts, and those only the list has (none)
-        let mut all = self.keywords();
+        let mut all = keywords;
         for l in self.keyword_list.values() {
             if !all.iter().any(|(k, _)| same(k, &l.path)) {
                 all.push((l.path.clone(), 0));

@@ -57,6 +57,7 @@ impl crate::Session {
         let content_key = content_key(&p);
         let content = Hasher128::new().str(&content_key).finish().0 as u64;
         let source_key = super::quick::source_identity(&p);
+        let decoder = super::quick::decoder_key(&p);
         // Temporary "before" settings must not replace the photo's cached develop hash.
         let settings_hash =
             if before { settings.hash64() ^ crate::files::hot_pixel_key(&settings) } else { self.media.settings_hashes.get(id, &settings) };
@@ -72,7 +73,8 @@ impl crate::Session {
             ^ content.rotate_left(17)
             ^ salt
             ^ profile_salt.rotate_left(29)
-            ^ lens.rotate_left(37);
+            ^ lens.rotate_left(37)
+            ^ decoder.rotate_left(43);
         let cache = thumb_bucket.map(|b| {
             let mut k = Hasher128::new();
             k.str(&content_key).u64(settings_hash).u64(b as u64).u64(RENDER_CACHE_VERSION);
@@ -88,6 +90,9 @@ impl crate::Session {
             // (likewise a database lens profile: thumbnails of every other photo keep their keys)
             if lens != 0 {
                 k.u64(lens);
+            }
+            if decoder != 0 {
+                k.str("decoder").u64(decoder);
             }
             (self.media.rendered.clone(), k.finish())
         });
@@ -131,6 +136,7 @@ impl crate::Session {
         let profile_salt = self.media.camera_profile_salt(&settings.profile.id);
         // (the photo's database lens profile stays part of it: a profile looked up again renders afresh)
         let lens = self.catalog.photo(id).map_or(0, |p| super::quick::lens_key(p));
+        let decoder = super::quick::decoder_key(&p);
         job.key = settings.hash64()
             ^ crate::files::hot_pixel_key(settings)
             ^ ((max_w as u64) << 40)
@@ -138,7 +144,8 @@ impl crate::Session {
             ^ (apply_crop as u64)
             ^ (job.level as u64) << 60
             ^ profile_salt.rotate_left(29)
-            ^ lens.rotate_left(37);
+            ^ lens.rotate_left(37)
+            ^ decoder.rotate_left(43);
         Some(job)
     }
 
@@ -158,6 +165,10 @@ impl crate::Session {
         let lens = super::quick::lens_key(p);
         if lens != 0 {
             k.u64(lens);
+        }
+        let decoder = super::quick::decoder_key(p);
+        if decoder != 0 {
+            k.str("decoder").u64(decoder);
         }
         k.finish()
     }
@@ -294,6 +305,10 @@ impl crate::Session {
         if lens != 0 {
             k.u64(lens);
         }
+        let decoder = super::quick::decoder_key(p);
+        if decoder != 0 {
+            k.str("decoder").u64(decoder);
+        }
         k.finish()
     }
 
@@ -352,7 +367,7 @@ impl crate::Session {
             p.height.max(1) as usize,
             &job.settings,
             apply_crop,
-            p.embedded_lens.as_ref(),
+            p.embedded_lens.as_deref(),
         );
         let ppl = frame.px_per_long(full_w);
         lightcraft_pipeline::spots::window_for_reads_checked(&job.settings, &frame, full_w, full_h, ppl, window.clamped(full_w, full_h))?;
@@ -422,7 +437,7 @@ impl crate::Session {
             .u64(id.0)
             .u64(profile_salt)
             .finish();
-        let key = h.0 as u64;
+        let key = h.0 as u64 ^ super::quick::decoder_key(&p).rotate_left(43);
         let embedded = self.embedded_of(&p).map(|(path, l)| (path, l, max_edge.clamp(1, SourceLevel::Preview.max_edge())));
         let embedded_cache = embedded.as_ref().map(|(_, _, edge)| {
             let cache = self.media.rendered.clone();
@@ -586,7 +601,10 @@ impl crate::Session {
         }
         job.request.space = space;
         job.request.depth = depth;
-        job.key ^= (space as u64 + 1).wrapping_mul(0xa076_1d64_78bd_642f) ^ (depth as u64 + 1).wrapping_mul(0xe703_7ed1_a0b4_28db);
+        // an export shrinks with a sharp filter: a preview's soft one leaves a small export blurred (#2970)
+        job.request.downscale = lightcraft_pipeline::Downscale::Sharp;
+        job.key ^=
+            (space as u64 + 1).wrapping_mul(0xa076_1d64_78bd_642f) ^ (depth as u64 + 1).wrapping_mul(0xe703_7ed1_a0b4_28db) ^ 0x9e37_79b9_7f4a_7c15;
         Ok(job)
     }
 
