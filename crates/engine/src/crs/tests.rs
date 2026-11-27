@@ -359,6 +359,40 @@ fn lightroom_profile_bookkeeping_is_not_reported() {
 }
 
 #[test]
+fn legacy_optics_defaults_and_identity_channel_curves_do_not_warn() {
+    let attrs = r#"crs:AutoWhiteVersion="134348800" crs:ChromaticAberrationR="+0" crs:ChromaticAberrationB="0.0" crs:Defringe="0""#;
+    let curve = r#"<crs:ToneCurveRed><rdf:Seq><rdf:li>0, 0</rdf:li><rdf:li>255, 255</rdf:li></rdf:Seq></crs:ToneCurveRed>"#;
+    assert!(unmapped(&preset_packet(attrs, curve)).is_empty());
+
+    let collinear = curve.replace("<rdf:li>255, 255", "<rdf:li>128, 128</rdf:li><rdf:li>255, 255");
+    assert!(unmapped(&preset_packet(attrs, &collinear)).is_empty());
+    let unordered = collinear.replace("<rdf:li>255, 255", "<rdf:li>64, 64</rdf:li><rdf:li>255, 255");
+    assert_eq!(unmapped(&preset_packet(attrs, &unordered)), ["ToneCurveRed"]);
+
+    let attrs = attrs.replace(r#"crs:Defringe="0""#, r#"crs:Defringe="1""#);
+    let curve = curve.replace("255, 255", "255, 220");
+    assert_eq!(unmapped(&preset_packet(&attrs, &curve)), ["Defringe", "ToneCurveRed"]);
+}
+
+#[test]
+fn auto_white_version_preserves_an_explicit_crop_reset() {
+    let packet = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/">
+      <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+        <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+          crs:AutoWhiteVersion="134348800" crs:HasCrop="False"/>
+      </rdf:RDF></x:xmpmeta>"#;
+    let target = Target::RawAbsolute;
+    let defaults = DevelopSettings::default();
+    let cropped = apply_partial(&defaults, &to_partial(&props(SIDECAR), target), 1.0);
+    assert_ne!(cropped.crop.geometry, defaults.crop.geometry);
+
+    let sidecar = crate::sidecar::parse_sidecar(packet, target).unwrap();
+    assert!(sidecar.warnings.is_empty());
+    let Some(crate::sidecar::DevelopPatch::Partial(patch)) = sidecar.develop else { panic!("expected a crop reset") };
+    assert_eq!(apply_partial(&cropped, &patch, 1.0).crop.geometry, defaults.crop.geometry);
+}
+
+#[test]
 fn disabled_lens_profile_switch_keeps_embedded_corrections() {
     // Lightroom applies a file's built-in lens corrections regardless of its profile switch,
     // and ours are only those: a preset's `LensProfileEnable=0` must not turn them off

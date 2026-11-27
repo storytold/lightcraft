@@ -497,12 +497,34 @@ pub fn to_partial_report(props: &Props, values: Option<&crate::crs_masks::Values
     // Point Color slots that are all empty (-1)
     let value_is = |k: &str, f: &dyn Fn(&[String]) -> bool| props.get(&format!("crs:{k}")).is_some_and(|v| f(v));
     let empty_points = |v: &[String]| v.iter().all(|s| s.split(',').all(|n| n.trim().parse::<f64>().is_ok_and(|x| x == -1.0) || n.trim().is_empty()));
+    let identity_curve = |v: &[String]| {
+        let mut previous = None;
+        for point in v {
+            let Some((x, y)) = point.split_once(',') else { return false };
+            let (Ok(x), Ok(y)) = (x.trim().parse::<f64>(), y.trim().parse::<f64>()) else {
+                return false;
+            };
+            let ascending = match previous {
+                None => x == 0.0,
+                Some(prior) => x > prior,
+            };
+            if !ascending || !(0.0..=255.0).contains(&x) || x != y {
+                return false;
+            }
+            previous = Some(x);
+        }
+        previous == Some(255.0)
+    };
     let quiet = |k: &str| {
         k.starts_with("Enable")
             || k.starts_with("ToneCurveName")
             || k == "AutoTone"
             || k == "AutoGrayscaleMix"
+            || k == "AutoWhiteVersion"
             || (k == "PointColors" && value_is(k, &empty_points))
+            || (matches!(k, "ChromaticAberrationB" | "ChromaticAberrationR" | "Defringe")
+                && value_is(k, &|v| v.len() == 1 && v.iter().all(|s| s.trim().parse::<f64>().is_ok_and(|n| n == 0.0))))
+            || (matches!(k, "ToneCurveRed" | "ToneCurveGreen" | "ToneCurveBlue") && value_is(k, &identity_curve))
             // the lens profile's strength, written at its default (100 %) next to every profile
             || (matches!(k, "LensProfileDistortionScale" | "LensProfileVignettingScale") && value_is(k, &|v| v.iter().all(|s| s.trim() == "100")))
     };
