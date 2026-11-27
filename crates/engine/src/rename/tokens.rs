@@ -144,7 +144,7 @@ pub fn folder_template_error(template: &str) -> Option<String> {
 /// The folders (relative to the destination) a folder template gives `p`: the template's own `/`
 /// (or `\`) separate levels; each level's tokens are expanded and the result made a safe folder
 /// name — a value can never add a level or climb out (`/`, `\`, `:`… become `-`, leading and
-/// trailing dots are dropped). A level that comes out empty (missing metadata) is `unknown`; empty
+/// trailing dots and whitespace are dropped). A level that comes out empty is `unknown`; empty
 /// levels in the template (`a//b`) are skipped. `{date}` is the capture time, else [`Photo::date`]'s
 /// fallback (the import time). Check [`folder_template_error`] first; levels it rejects are skipped.
 pub fn expand_folder(template: &str, p: &Photo, seq: usize) -> Vec<String> {
@@ -154,7 +154,8 @@ pub fn expand_folder(template: &str, p: &Photo, seq: usize) -> Vec<String> {
         .filter(|s| !s.is_empty() && !matches!(*s, "." | ".."))
         .map(|s| {
             let v = sanitize(&expand_tokens(s, p, seq, 1));
-            if v.is_empty() { "unknown".to_string() } else { v }
+            let v = v.trim_matches(|c: char| c == '.' || c.is_whitespace());
+            if v.is_empty() { "unknown".to_string() } else { v.to_string() }
         })
         .collect()
 }
