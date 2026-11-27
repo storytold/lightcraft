@@ -1,3 +1,4 @@
+use super::registry::{ADOBE_CRS_FIELDS, MAPPED_CRS_FIELDS, METADATA_SKIPPED_CRS_FIELDS, REPORTED_CRS_FIELDS};
 use super::*;
 use lightcraft_develop::{DevelopSettings, Upright, VignetteStyle, WbMode, apply_partial};
 
@@ -32,6 +33,208 @@ const SIDECAR: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/">
 
 fn props(x: &str) -> Props {
     lightcraft_meta::parse_xmp(x).unwrap().properties
+}
+
+// The registry and its field decisions live in `super::registry`, beside `NON_ADJUSTMENT`;
+// the tests below check that classification against the mapping and the docs.
+
+/// Fields the report deliberately leaves out at any value (`to_partial_report`'s `quiet`):
+/// panel switches and names that change nothing by themselves. The value-conditional fields
+/// report away from their default and live in the reported list with a note.
+fn quietly_ignored(f: &str) -> bool {
+    f.starts_with("Enable")
+        || f.starts_with("ToneCurveName")
+        || matches!(f, "AutoBrightness" | "AutoContrast" | "AutoExposure" | "AutoShadows" | "AutoTone" | "AutoGrayscaleMix")
+}
+
+/// Every Adobe field must have a decision: read, skipped as metadata, ignored as packet
+/// bookkeeping, quietly skipped, or reported with a reason. A field in none of them falls
+/// through the import (#4435).
+#[test]
+fn every_adobe_crs_field_gets_a_decision() {
+    let unclassified: Vec<&str> = ADOBE_CRS_FIELDS
+        .iter()
+        .copied()
+        .filter(|f| {
+            !MAPPED_CRS_FIELDS.contains(f)
+                && !METADATA_SKIPPED_CRS_FIELDS.contains(f)
+                && !REPORTED_CRS_FIELDS.contains(f)
+                && !NON_ADJUSTMENT.contains(&format!("crs:{f}").as_str())
+                && !quietly_ignored(f)
+        })
+        .collect();
+    assert!(
+        unclassified.is_empty(),
+        "no import decision yet: map it, ignore it as bookkeeping, or report it ({}) {unclassified:?}",
+        unclassified.len()
+    );
+}
+
+/// The reported list is not just intent: every field of it reaches the import's report, since
+/// the mapping reads none of them (#4435).
+#[test]
+fn every_reported_crs_field_reaches_the_report() {
+    for &f in REPORTED_CRS_FIELDS {
+        let x = format!(
+            r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:{f}="1"/>"#
+        );
+        let (_, report) = to_partial_report(&props(&x), None, Target::Any, 1.5);
+        assert!(report.iter().any(|r| r == f), "{f} should reach the report, got {report:?}");
+    }
+}
+
+/// One field, one content decision (applied, skipped as metadata, or reported - never two of
+/// them), every listed name a real registry field, and a reported field never bookkeeping (#4435).
+#[test]
+fn the_classification_lists_are_consistent() {
+    let decisions = |f: &str| {
+        [MAPPED_CRS_FIELDS.contains(&f), METADATA_SKIPPED_CRS_FIELDS.contains(&f), REPORTED_CRS_FIELDS.contains(&f)]
+            .into_iter()
+            .filter(|present| *present)
+            .count()
+    };
+    for &f in ADOBE_CRS_FIELDS {
+        assert!(decisions(f) <= 1, "{f} carries more than one content decision");
+    }
+    for f in MAPPED_CRS_FIELDS.iter().chain(METADATA_SKIPPED_CRS_FIELDS).chain(REPORTED_CRS_FIELDS) {
+        assert!(ADOBE_CRS_FIELDS.contains(f), "{f} is not in the Adobe registry");
+        if REPORTED_CRS_FIELDS.contains(f) {
+            assert!(!NON_ADJUSTMENT.contains(&format!("crs:{f}").as_str()), "{f} is reported but listed as bookkeeping");
+        }
+    }
+    for k in NON_ADJUSTMENT {
+        assert!(ADOBE_CRS_FIELDS.contains(&k.trim_start_matches("crs:")), "{k} is not in the Adobe registry");
+    }
+}
+
+/// The conditional fields report only away from their default: at it, `quiet` keeps them out of
+/// the report; anywhere else they are real gaps (#4435).
+#[test]
+fn conditional_fields_report_away_from_their_default() {
+    let at = |name: &str, value: &str| {
+        let x = format!(
+            r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:{name}="{value}"/>"#
+        );
+        to_partial_report(&props(&x), None, Target::Any, 1.5).1
+    };
+    // the lens-profile strength trio at 100 % is the profile's own bookkeeping (Lightroom
+    // writes DistortionScale at 100 on every sidecar of a real set); any other strength is a
+    // correction LightCraft does not carry over
+    for scale in ["LensProfileDistortionScale", "LensProfileVignettingScale", "LensProfileChromaticAberrationScale"] {
+        assert!(at(scale, "100").is_empty(), "{scale} at its default is quiet");
+        assert_eq!(at(scale, "60"), [scale], "{scale} away from its default is reported");
+    }
+    // an empty Point Colors set is the profile's own bookkeeping; a used slot is a real gap
+    assert!(at("PointColors", "-1.000000, -1.000000, -1.000000, -1.000000").is_empty());
+    assert_eq!(at("PointColors", "0.5, 0.2, 0.1, 10, 0, 0, 0, 0"), ["PointColors"]);
+}
+
+/// The grouped notations `docs/xmp-interop.md` writes instead of every field name on its own,
+/// expanded here so the drift guard sees through them.
+const DOC_GROUPS: &[(&str, &[&str])] = &[
+    (
+        "HueAdjustment<Band>",
+        &[
+            "HueAdjustmentRed",
+            "HueAdjustmentOrange",
+            "HueAdjustmentYellow",
+            "HueAdjustmentGreen",
+            "HueAdjustmentAqua",
+            "HueAdjustmentBlue",
+            "HueAdjustmentPurple",
+            "HueAdjustmentMagenta",
+        ],
+    ),
+    (
+        "SaturationAdjustment<Band>",
+        &[
+            "SaturationAdjustmentRed",
+            "SaturationAdjustmentOrange",
+            "SaturationAdjustmentYellow",
+            "SaturationAdjustmentGreen",
+            "SaturationAdjustmentAqua",
+            "SaturationAdjustmentBlue",
+            "SaturationAdjustmentPurple",
+            "SaturationAdjustmentMagenta",
+        ],
+    ),
+    (
+        "LuminanceAdjustment<Band>",
+        &[
+            "LuminanceAdjustmentRed",
+            "LuminanceAdjustmentOrange",
+            "LuminanceAdjustmentYellow",
+            "LuminanceAdjustmentGreen",
+            "LuminanceAdjustmentAqua",
+            "LuminanceAdjustmentBlue",
+            "LuminanceAdjustmentPurple",
+            "LuminanceAdjustmentMagenta",
+        ],
+    ),
+    (
+        "GrayMixer<Band>",
+        &[
+            "GrayMixerRed",
+            "GrayMixerOrange",
+            "GrayMixerYellow",
+            "GrayMixerGreen",
+            "GrayMixerAqua",
+            "GrayMixerBlue",
+            "GrayMixerPurple",
+            "GrayMixerMagenta",
+        ],
+    ),
+    ("ToneCurvePV2012Red/Green/Blue", &["ToneCurvePV2012Red", "ToneCurvePV2012Green", "ToneCurvePV2012Blue"]),
+    ("SplitToningShadowHue/Saturation", &["SplitToningShadowHue", "SplitToningShadowSaturation"]),
+    ("SplitToningHighlightHue/Saturation", &["SplitToningHighlightHue", "SplitToningHighlightSaturation"]),
+    ("ColorGradeMidtoneHue/Sat/Lum", &["ColorGradeMidtoneHue", "ColorGradeMidtoneSat", "ColorGradeMidtoneLum"]),
+    ("ColorGradeGlobalHue/Sat/Lum", &["ColorGradeGlobalHue", "ColorGradeGlobalSat", "ColorGradeGlobalLum"]),
+    (
+        "PostCropVignetteAmount/Midpoint/Roundness/Feather/HighlightContrast",
+        &[
+            "PostCropVignetteAmount",
+            "PostCropVignetteMidpoint",
+            "PostCropVignetteRoundness",
+            "PostCropVignetteFeather",
+            "PostCropVignetteHighlightContrast",
+        ],
+    ),
+    (
+        "DefringePurple/GreenAmount/HueLo/HueHi",
+        &["DefringePurpleAmount", "DefringeGreenAmount", "DefringePurpleHueLo", "DefringePurpleHueHi", "DefringeGreenHueLo", "DefringeGreenHueHi"],
+    ),
+    ("RedHue/Saturation", &["RedHue", "RedSaturation"]),
+    ("GreenHue/Saturation", &["GreenHue", "GreenSaturation"]),
+    ("BlueHue/Saturation", &["BlueHue", "BlueSaturation"]),
+    ("CropLeft/Top/Right/Bottom", &["CropLeft", "CropTop", "CropRight", "CropBottom"]),
+    (
+        "PerspectiveVertical/Horizontal/Rotate/Scale/Aspect/X/Y",
+        &[
+            "PerspectiveVertical",
+            "PerspectiveHorizontal",
+            "PerspectiveRotate",
+            "PerspectiveScale",
+            "PerspectiveAspect",
+            "PerspectiveX",
+            "PerspectiveY",
+        ],
+    ),
+];
+
+/// The mapped list follows `docs/xmp-interop.md`: a mapping without a doc row is a review miss.
+#[test]
+fn every_mapped_crs_field_is_documented() {
+    let docs = include_str!("../../../../docs/xmp-interop.md");
+    let missing: Vec<&str> = MAPPED_CRS_FIELDS
+        .iter()
+        .copied()
+        .filter(|f| {
+            !docs.contains(&format!("`{f}`"))
+                && !docs.contains(&format!("`crs:{f}`"))
+                && !DOC_GROUPS.iter().any(|(form, fields)| docs.contains(&format!("`{form}`")) && fields.contains(f))
+        })
+        .collect();
+    assert!(missing.is_empty(), "mapped fields missing from docs/xmp-interop.md: {missing:?}");
 }
 
 #[test]
