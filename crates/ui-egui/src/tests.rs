@@ -103,6 +103,7 @@ mod rating;
 mod recheck;
 mod reduce_motion;
 mod rename_person;
+mod report_bug;
 mod rules_editor;
 mod rules_reorder;
 mod sam_setup;
