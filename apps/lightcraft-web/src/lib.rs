@@ -21,6 +21,8 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+#[cfg(any(test, target_arch = "wasm32"))]
+mod api;
 pub mod automation;
 pub mod backup;
 pub mod bench;
