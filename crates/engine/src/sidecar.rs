@@ -880,9 +880,25 @@ fn sidecar_contents(path: &Path, fresh: String, stamp: &str) -> std::io::Result<
     Ok((fresh, false, Some(b)))
 }
 
-/// Key of the stem sidecar a file maps to (case-insensitive).
+/// Key of the stem sidecar a file maps to: case-insensitive, and in a Windows path ([`windows_style`]) `\` and `/`
+/// are one separator, as a library can hold one folder spelled both ways (a Windows import and a folder
+/// synchronization; issue #4466), and files that share a stem must share a key whatever their spelling. A POSIX
+/// path keeps a `\` as the character it is there: part of a name, not a separator (review of #4467).
 fn stem_key(original: &str) -> String {
-    sidecar_path(original, SidecarNaming::Stem).to_string_lossy().to_lowercase()
+    sidecar_path(&separators_folded(original), SidecarNaming::Stem).to_string_lossy().to_lowercase()
+}
+
+/// A path written the Windows way: a drive (`C:\`, `C:/`) or a UNC share (`\\server`, `//server`). Only there is
+/// `\` a separator.
+fn windows_style(path: &str) -> bool {
+    let b = path.as_bytes();
+    let sep = |c: u8| c == b'\\' || c == b'/';
+    (b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && sep(b[2])) || (b.len() >= 2 && sep(b[0]) && sep(b[1]) && b[0] == b'\\')
+}
+
+/// `path` with its separators written `/` when it is a Windows path ([`windows_style`]); as it is otherwise.
+fn separators_folded(path: &str) -> std::borrow::Cow<'_, str> {
+    if windows_style(path) && path.contains('\\') { path.replace('\\', "/").into() } else { path.into() }
 }
 
 /// Where a plain path is cut to make its [`stem_key`]: at the dot of its extension, which is
@@ -899,16 +915,20 @@ fn plain_cut(original: &str) -> Option<usize> {
 }
 
 /// [`stem_key`] written into `key`, which is reused: nothing is allocated for a plain path
-/// ([`plain_cut`]). Any other shape goes the long way.
+/// ([`plain_cut`], of the path with its separators made `/`). Any other shape goes the long way.
 fn stem_key_into(key: &mut String, original: &str) {
     key.clear();
-    match plain_cut(original) {
+    key.push_str(&separators_folded(original));
+    match plain_cut(key) {
         Some(cut) => {
-            key.push_str(original.get(..cut).unwrap_or_default());
+            key.truncate(cut);
             key.make_ascii_lowercase();
             key.push_str(".xmp");
         }
-        None => key.push_str(&stem_key(original)),
+        None => {
+            key.clear();
+            key.push_str(&stem_key(original));
+        }
     }
 }
 
@@ -1115,9 +1135,10 @@ impl ImportStems {
     pub(crate) fn for_import<'a>(cat: Option<&lightcraft_catalog::Catalog>, incoming: impl Iterator<Item = (&'a str, MediaKind)>) -> ImportStems {
         // per stem: the best of the library's files, and the best arriving file with its path
         let mut best: HashMap<String, (Option<Rank>, Option<(Rank, &'a str)>)> = HashMap::new();
-        let mut arriving_paths = HashSet::new();
+        // (the arriving paths with `/` for every separator: a file's own record may spell them otherwise)
+        let mut arriving_paths: HashSet<String> = HashSet::new();
         for (arriving, (path, kind)) in incoming.enumerate() {
-            arriving_paths.insert(path);
+            arriving_paths.insert(separators_folded(path).into_owned());
             let e = best.entry(stem_key(path)).or_default();
             let rank = rank_of(path, kind, arriving as u64);
             if e.1.as_ref().is_none_or(|(b, _)| rank < *b) {
@@ -1127,10 +1148,14 @@ impl ImportStems {
         if let Some(cat) = cat {
             let mut key = String::new();
             for p in cat.photos().filter(|p| p.copy_of.is_none()) {
-                // the arriving file's own record (a trashed photo imported again) is not a rival
-                let Some(path) = file_path(p).filter(|path| !arriving_paths.contains(*path)) else { continue };
+                let Some(path) = file_path(p) else { continue };
                 stem_key_into(&mut key, path);
                 let Some(e) = best.get_mut(key.as_str()) else { continue };
+                // the arriving file's own record (a trashed photo imported again) is not a rival,
+                // whichever separators the record and the arriving path are spelled with
+                if arriving_paths.contains(separators_folded(path).as_ref()) {
+                    continue;
+                }
                 let rank = rank_of(path, p.kind, p.id.0);
                 if e.0.as_ref().is_none_or(|b| rank < *b) {
                     e.0 = Some(rank);
