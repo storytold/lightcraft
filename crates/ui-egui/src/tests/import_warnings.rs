@@ -132,6 +132,21 @@ fn the_toast_is_capped() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// One photo with many fields is capped like every other line: the singleton path listed them
+/// all (#4831 review).
+#[test]
+fn a_singleton_line_is_capped_too() {
+    let (_, dir, text) = import_with(
+        "solo",
+        &["crs:F1=\"0\" crs:F2=\"0\" crs:F3=\"0\" crs:F4=\"0\" crs:F5=\"0\" crs:F6=\"0\" crs:F7=\"0\" crs:F8=\"0\" crs:F9=\"0\""],
+    );
+    assert!(text.contains("Import warnings (1):"), "{text}");
+    assert!(text.contains("+1 more"), "the ninth field is behind the cap: {text}");
+    assert!(text.contains("img0.png"), "the singleton keeps its path: {text}");
+    assert!(!text.contains("F9"), "the overflow is not listed: {text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The same camera profile on several photos is one counted line naming the profile (#3050).
 #[test]
 fn one_profile_groups_into_one_counted_line() {
