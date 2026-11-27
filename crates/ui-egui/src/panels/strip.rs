@@ -16,7 +16,7 @@ const GAP: f32 = 6.0;
 
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    egui::Panel::right("tool_strip")
+    craft_ui::direction::end_panel(ui, "tool_strip")
         .exact_size(t.strip_w)
         .resizable(false)
         .frame(
