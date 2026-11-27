@@ -1417,9 +1417,11 @@ mod tests {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod smart_provenance_tests {
-    use super::{Ages, smart_run};
+    use super::{Ages, SmartJob, smart_run};
     use crate::media::{SourceLevel, SourceRef};
+    use crate::smart::PreviewPath;
     use lightcraft_catalog::{MediaKind, Photo, PhotoId, Source};
+    use std::path::Path;
     use std::sync::Arc;
 
     fn temp(tag: &str) -> std::io::Result<std::path::PathBuf> {
@@ -1427,6 +1429,15 @@ mod smart_provenance_tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir)?;
         Ok(dir)
+    }
+
+    fn rendered_photo(dir: &Path, id: u64, name: &str) -> Photo {
+        let source = Source::File { path: dir.join(name).to_string_lossy().into_owned() };
+        Photo::new(PhotoId(id), source, name, "JPEG", 32, 24, "")
+    }
+
+    fn job(dir: &Path, photo: &Photo, source: SourceRef, ages: Ages) -> SmartJob {
+        SmartJob { id: photo.id, path: PreviewPath::new(dir, photo), source: Some(source), ages, availability: Default::default() }
     }
 
     #[test]
@@ -1447,7 +1458,8 @@ mod smart_provenance_tests {
         std::fs::create_dir_all(shard.parent().unwrap()).unwrap();
         let mut image = lightcraft_raster::Rgb32f::new(48, 32);
         image.data.fill([0.25, 0.3, 0.2]);
-        let bytes = crate::smart::encode(&image, None).unwrap();
+        let facts = lightcraft_pipeline::SourceInfo { raw: true, ..Default::default() };
+        let bytes = crate::smart::encode(&image, Some(&facts)).unwrap();
         let start = b"LCSP1\n".len();
         let nl = start + bytes[start..].iter().position(|b| *b == b'\n').unwrap();
         let mut head: serde_json::Value = serde_json::from_slice(&bytes[start..nl]).unwrap();
@@ -1467,18 +1479,18 @@ mod smart_provenance_tests {
         let cached_missing = shard.to_string_lossy().into_owned();
         session.media.availability.set_probe(Arc::new(move |path| path != cached_missing));
         let source = session.media.source_ref(&photo, SourceLevel::Preview);
-        assert!(matches!(&source, SourceRef::File { fallback: Some(p), .. } if p == &legacy));
+        assert!(matches!(&source, SourceRef::File { fallback: Some(p), .. } if p.candidates().contains(&legacy)));
         assert!(source.load_source().unwrap().from_proxy, "the renderer can still use the offline fallback");
-        let counts = smart_run(&dir, false, false, vec![(photo.id, shard.clone(), Some(source), Ages::of(&photo))], None).unwrap();
-        assert_eq!((counts.built, counts.repaired, counts.refreshed, counts.stale_kept, counts.failed.len()), (0, 0, 0, 0, 1));
+        let counts = smart_run(&dir, false, None, vec![job(&dir, &photo, source, Ages::of(&photo))], None).unwrap();
+        assert_eq!((counts.built, counts.repaired, counts.refreshed, counts.stale_kept, counts.failed.len()), (1, 0, 0, 1, 0));
         assert_eq!(std::fs::read(&shard).unwrap(), b"broken", "a failed repair leaves its destination untouched");
         assert_eq!(std::fs::read(&legacy).unwrap(), old);
         assert!(crate::smart::load(&legacy).unwrap().from_proxy);
 
-        session.media.file_loader = Some(Arc::new(move |_, _, _| Ok((image.clone(), Default::default()))));
+        session.media.file_loader = Some(Arc::new(move |_, _, _| Ok((image.clone(), facts.clone()))));
         let source = session.media.source_ref(&photo, SourceLevel::Preview);
-        let counts = smart_run(&dir, false, false, vec![(photo.id, shard.clone(), Some(source), Ages::of(&photo))], None).unwrap();
-        assert_eq!((counts.built, counts.repaired, counts.refreshed, counts.failed.len()), (1, 1, 0, 0));
+        let counts = smart_run(&dir, false, None, vec![job(&dir, &photo, source, Ages::of(&photo))], None).unwrap();
+        assert_eq!((counts.built, counts.repaired, counts.refreshed, counts.failed.len()), (1, 0, 1, 0));
         assert!(crate::smart::is_valid(&shard));
         assert!(!crate::smart::is_stale_for(&shard, true));
         assert_eq!(std::fs::read(&legacy).unwrap(), old, "repair does not overwrite the valid legacy copy");
@@ -1488,7 +1500,9 @@ mod smart_provenance_tests {
     #[test]
     fn missing_target_never_encodes_proxy_sources_but_keeps_valid_offline_proxies() {
         let dir = temp("missing-target").unwrap();
-        let legacy = dir.join("legacy.lcsp");
+        let cached = rendered_photo(&dir, 1, "cached.jpg");
+        let cached_path = PreviewPath::new(&dir, &cached);
+        let legacy = dir.join(crate::smart::file_name(&cached));
         let image = lightcraft_raster::Rgb32f::new(48, 32);
         let bytes = crate::smart::encode(&image, Some(&Default::default())).unwrap();
         std::fs::write(&legacy, &bytes).unwrap();
@@ -1500,18 +1514,18 @@ mod smart_provenance_tests {
             SourceRef::Loaded(Box::new(reduced)),
             SourceRef::Loaded(Box::new(loaded.clone())),
             SourceRef::Fit { from: Box::new(loaded), max_edge: 24 },
-            SourceRef::Smart { path: legacy.clone() },
+            SourceRef::Smart { path: cached_path.clone() },
         ];
+        let ages = Ages { look: true, source: true };
         for (i, source) in sources.into_iter().enumerate() {
-            let target = dir.join(format!("missing-{i}.lcsp"));
-            let counts =
-                smart_run(&dir, false, false, vec![(PhotoId(1), target.clone(), Some(source), Ages { look: true, source: true })], None).unwrap();
+            let photo = rendered_photo(&dir, 2, &format!("missing-{i}.jpg"));
+            let target = crate::smart::sharded_file_path(&dir, &photo);
+            let counts = smart_run(&dir, false, None, vec![job(&dir, &photo, source, ages)], None).unwrap();
             assert_eq!((counts.built, counts.repaired, counts.failed.len()), (0, 0, 1));
             assert!(!target.exists());
         }
-        let source = SourceRef::Smart { path: legacy.clone() };
-        let counts =
-            smart_run(&dir, false, false, vec![(PhotoId(1), legacy.clone(), Some(source), Ages { look: true, source: true })], None).unwrap();
+        let source = SourceRef::Smart { path: cached_path };
+        let counts = smart_run(&dir, false, None, vec![job(&dir, &cached, source, ages)], None).unwrap();
         assert_eq!((counts.built, counts.repaired, counts.failed.len()), (1, 0, 0));
         assert_eq!(std::fs::read(&legacy).unwrap(), bytes);
         let _ = std::fs::remove_dir_all(&dir);
@@ -1660,13 +1674,16 @@ mod smart_provenance_tests {
         let database = dir.join("lens.xml");
         let image = lightcraft_raster::Rgb32f::new(32, 24);
         let old = crate::smart::encode_with_lens_key(&image, None, 0).unwrap();
+        let photo = rendered_photo(&dir, 1, "original.jpg");
+        let target = crate::smart::sharded_file_path(&dir, &photo);
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        let ages = Ages { look: true, source: true };
         for replace in [false, true] {
             for existing in [None, Some(b"broken".to_vec()), Some(old.clone())] {
                 std::fs::write(&database, DB).unwrap();
                 crate::lens_profiles::reload();
                 let before = crate::lens_profiles::cache_key();
                 assert_ne!(before, 0);
-                let target = dir.join("target.lcsp");
                 if let Some(bytes) = &existing {
                     std::fs::write(&target, bytes).unwrap();
                 } else {
@@ -1684,10 +1701,8 @@ mod smart_provenance_tests {
                     }
                     Ok((pixels.clone(), Default::default()))
                 }));
-                let origin = Source::File { path: dir.join("original.arw").to_string_lossy().into_owned() };
-                let source = session.media.origin_ref(&origin, SourceLevel::Preview.max_edge());
-                let counts =
-                    smart_run(&dir, false, false, vec![(PhotoId(1), target.clone(), Some(source), Ages { look: true, source: true })], None).unwrap();
+                let source = session.media.origin_ref_of(&photo, SourceLevel::Preview.max_edge());
+                let counts = smart_run(&dir, false, None, vec![job(&dir, &photo, source, ages)], None).unwrap();
                 assert_ne!(crate::lens_profiles::cache_key(), before);
                 if let Some(bytes) = &existing {
                     assert_eq!(std::fs::read(&target).unwrap(), *bytes, "a reload never replaces the previous destination");
@@ -1705,16 +1720,16 @@ mod smart_provenance_tests {
                 std::fs::write(&database, DB).unwrap();
                 crate::lens_profiles::reload();
                 std::fs::write(&target, &old).unwrap();
-                let source = session.media.origin_ref(&origin, SourceLevel::Preview.max_edge());
-                super::refresh_stale(&dir, vec![(PhotoId(1), target.clone(), Some(source), Ages { look: true, source: true })]);
+                let source = session.media.origin_ref_of(&photo, SourceLevel::Preview.max_edge());
+                super::refresh_stale(&dir, vec![job(&dir, &photo, source, ages)]);
                 assert_eq!(std::fs::read(&target).unwrap(), old);
                 assert!(!crate::smart::look_checked(&dir));
 
                 // A subsequent stable decode writes B's identity and can complete the scan.
                 let pixels = image.clone();
                 session.media.file_loader = Some(Arc::new(move |_, _, _| Ok((pixels.clone(), Default::default()))));
-                let source = session.media.origin_ref(&origin, SourceLevel::Preview.max_edge());
-                super::refresh_stale(&dir, vec![(PhotoId(1), target.clone(), Some(source), Ages { look: true, source: true })]);
+                let source = session.media.origin_ref_of(&photo, SourceLevel::Preview.max_edge());
+                super::refresh_stale(&dir, vec![job(&dir, &photo, source, ages)]);
                 assert!(!crate::smart::is_stale_for(&target, true));
                 assert!(crate::smart::look_checked(&dir));
                 // Reset the marker before the next race attempt.
@@ -1727,11 +1742,15 @@ mod smart_provenance_tests {
         crate::lens_profiles::reload();
         let key_a = crate::lens_profiles::cache_key();
         crate::smart::mark_look_checked_with_lens_key(&dir, key_a).unwrap();
-        let (first, second) = (dir.join("first.lcsp"), dir.join("second.lcsp"));
+        let first_photo = rendered_photo(&dir, 1, "first.jpg");
+        let second_photo = rendered_photo(&dir, 2, "second.jpg");
+        let first = crate::smart::sharded_file_path(&dir, &first_photo);
+        let second = crate::smart::sharded_file_path(&dir, &second_photo);
         let older = crate::smart::encode_with_lens_key(&image, None, 0).unwrap();
-        std::fs::write(&first, &older).unwrap();
-        std::fs::write(&second, &older).unwrap();
-        let src = |session: &mut crate::Session| session.media.origin_ref(&Source::File { path: "test.arw".into() }, SourceLevel::Preview.max_edge());
+        for path in [&first, &second] {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, &older).unwrap();
+        }
         let (db_path, pixels) = (database.clone(), image.clone());
         let mut session = crate::Session::new();
         session.media.file_loader = Some(Arc::new(move |_, _, _| {
@@ -1739,14 +1758,10 @@ mod smart_provenance_tests {
             crate::lens_profiles::reload();
             Ok((pixels.clone(), Default::default()))
         }));
-        let first_source = src(&mut session);
+        let first_source = session.media.origin_ref_of(&first_photo, SourceLevel::Preview.max_edge());
         session.media.file_loader = Some(Arc::new(move |_, _, _| Ok((image.clone(), Default::default()))));
-        let second_source = src(&mut session);
-        let ages = Ages { look: true, source: true };
-        super::refresh_stale(
-            &dir,
-            vec![(PhotoId(1), first.clone(), Some(first_source), ages), (PhotoId(2), second.clone(), Some(second_source.clone()), ages)],
-        );
+        let second_source = session.media.origin_ref_of(&second_photo, SourceLevel::Preview.max_edge());
+        super::refresh_stale(&dir, vec![job(&dir, &first_photo, first_source, ages), job(&dir, &second_photo, second_source.clone(), ages)]);
         assert_eq!(std::fs::read(&first).unwrap(), older, "a reload during decode preserves the first proxy");
         assert_ne!(crate::lens_profiles::cache_key(), key_a);
         assert!(!crate::smart::is_stale_for(&second, true), "the next original was decoded with the new database");
@@ -1756,7 +1771,7 @@ mod smart_provenance_tests {
         assert_eq!(crate::lens_profiles::cache_key(), key_a);
         assert!(crate::smart::is_stale_for(&second, true));
         assert!(!crate::smart::look_checked(&dir), "the aborted scan must invalidate A's old folder marker");
-        super::refresh_stale(&dir, vec![(PhotoId(2), second.clone(), Some(second_source), ages)]);
+        super::refresh_stale(&dir, vec![job(&dir, &second_photo, second_source, ages)]);
         assert!(!crate::smart::is_stale_for(&second, true));
         assert!(crate::smart::look_checked(&dir), "a stable scan makes the folder current again");
     }
