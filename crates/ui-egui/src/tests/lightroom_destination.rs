@@ -461,6 +461,12 @@ fn no_catalog_dialog_is_an_error_not_silence() {
     assert!(app.pending_picks.iter().any(|p| p.command == "file.importLightroom"), "the pick waits for the dialog");
     drop(answer);
     app.pending_picks.clear();
+    // a host with only the background picker, which fails to start: its reason, not "no dialog" (review of #3656)
+    app.services.picker = Some(Box::new(|_| Err("the portal is not running".to_string())));
+    for command in ["file.importLightroom", "file.addFolder", "photo.tagFromTracklog"] {
+        let err = app.run(command, json!({})).unwrap_err();
+        assert!(err.contains("the portal is not running") && !err.contains("on this platform"), "{command}: {err}");
+    }
     app.services.picker = None;
     app.services.pick_lightroom_catalog = Some(Box::new(|| None));
     assert_eq!(app.run("file.importLightroom", json!({})).unwrap(), Value::Null);

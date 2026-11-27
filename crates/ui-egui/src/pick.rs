@@ -84,6 +84,8 @@ pub enum Picked {
     Later,
     /// This host has no such dialog.
     Unavailable,
+    /// This host has a background dialog, but it couldn't start (and there is no other to ask): why.
+    Failed(String),
 }
 
 /// Ask for a path for `command`, which was run with `params` but without `key`. With a [`Picker`]
@@ -101,6 +103,7 @@ pub fn ask(
     if app.pending_picks.iter().any(|p| p.command == command) {
         return Picked::Later;
     }
+    let mut failed = None;
     if let Some(start) = app.services.picker.as_mut() {
         let kind = request.kind;
         match start(request) {
@@ -108,12 +111,16 @@ pub fn ask(
                 app.pending_picks.push(Pending { command: command.to_string(), params: params.clone(), key, kind, rx });
                 return Picked::Later;
             }
-            Err(e) => log::warn!("{command}: no background file dialog ({e}); asking on the UI thread"),
+            Err(e) => {
+                log::warn!("{command}: no background file dialog ({e}); asking on the UI thread");
+                failed = Some(e.to_string());
+            }
         }
     }
-    match now(&mut app.services) {
-        Some(paths) => Picked::Now(paths),
-        None => Picked::Unavailable,
+    match (now(&mut app.services), failed) {
+        (Some(paths), _) => Picked::Now(paths),
+        (None, Some(e)) => Picked::Failed(e),
+        (None, None) => Picked::Unavailable,
     }
 }
 

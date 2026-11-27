@@ -34,7 +34,7 @@ pub fn start(app: &mut LightcraftApp, id: &str, p: &Value) -> Result<Value, Stri
         let paths = match crate::pick::ask(app, id, p, "path", req, |_| None) {
             Picked::Now(paths) => paths,
             Picked::Later => return Ok(Value::Null),
-            Picked::Unavailable => return Err("no save dialog on this platform; supply path".into()),
+            Picked::Unavailable | Picked::Failed(_) => return Err("no save dialog on this platform; supply path".into()),
         };
         let Some(path) = paths.into_iter().next() else { return Ok(Value::Null) };
         params["path"] = json!(path);

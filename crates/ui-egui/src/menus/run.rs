@@ -37,6 +37,7 @@ fn ask_folder(app: &mut LightcraftApp, id: &str, p: &Value, key: &'static str, t
         s.pick_folder.as_mut().and_then(|f| f()).map(|x| vec![x])
     }) {
         Picked::Now(v) => Ok(v.into_iter().next()),
+        Picked::Failed(e) => Err(format!("the folder dialog couldn't open: {e}")),
         Picked::Unavailable if app.services.pick_folder.is_none() => Err(NO_FOLDER_DIALOG.into()),
         Picked::Later | Picked::Unavailable => Ok(None),
     }
@@ -641,7 +642,7 @@ fn ui_commands_3(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
                             None => return Some(Ok(Value::Null)),
                         },
                         Picked::Later => return Some(Ok(Value::Null)),
-                        Picked::Unavailable => return Some(Err("no file dialog on this platform; supply path".into())),
+                        Picked::Unavailable | Picked::Failed(_) => return Some(Err("no file dialog on this platform; supply path".into())),
                     }
                 }
             };
@@ -1390,7 +1391,7 @@ fn ui_commands_9(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
                 let paths = match crate::pick::ask(app, id, p, "path", req, |_| None) {
                     Picked::Now(paths) => paths,
                     Picked::Later => return Some(Ok(Value::Null)),
-                    Picked::Unavailable => return Some(Err("no save dialog on this platform; supply path".into())),
+                    Picked::Unavailable | Picked::Failed(_) => return Some(Err("no save dialog on this platform; supply path".into())),
                 };
                 let Some(path) = paths.first() else { return Some(Ok(Value::Null)) };
                 params["path"] = json!(path);
@@ -1407,7 +1408,7 @@ fn ui_commands_9(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
                 let paths = match crate::pick::ask(app, id, p, "path", req, |_| None) {
                     Picked::Now(paths) => paths,
                     Picked::Later => return Some(Ok(Value::Null)),
-                    Picked::Unavailable => return Some(Err("no save dialog on this platform; supply path".into())),
+                    Picked::Unavailable | Picked::Failed(_) => return Some(Err("no save dialog on this platform; supply path".into())),
                 };
                 let Some(path) = paths.first() else { return Some(Ok(Value::Null)) };
                 params["path"] = json!(path);
@@ -1504,7 +1505,7 @@ fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
                     let req = PickRequest::files(None, crate::i18n::tr("Photos"), lightcraft_engine::import::EXTENSIONS);
                     match crate::pick::ask(app, id, p, "paths", req, |s| s.pick_files.as_mut().map(|f| f())) {
                         Picked::Now(paths) => paths,
-                        Picked::Later | Picked::Unavailable => return Some(Ok(Value::Null)),
+                        Picked::Later | Picked::Unavailable | Picked::Failed(_) => return Some(Ok(Value::Null)),
                     }
                 }
             };
@@ -1535,6 +1536,7 @@ fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
                     );
                     match crate::pick::ask(app, id, p, "path", req, |s| s.pick_lightroom_catalog.as_mut().and_then(|f| f()).map(|x| vec![x])) {
                         Picked::Now(v) => v.into_iter().next(),
+                        Picked::Failed(e) => return Some(Err(format!("the file dialog couldn't open: {e}"))),
                         Picked::Unavailable if app.services.pick_lightroom_catalog.is_none() => return Some(Err(NO_FILE_DIALOG.into())),
                         Picked::Later | Picked::Unavailable => None,
                     }
@@ -1630,7 +1632,7 @@ fn ui_commands_11(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
                     match crate::pick::ask(app, id, p, "path", req, |s| s.save_preset_file.as_mut().map(|f| f(&name).into_iter().collect())) {
                         Picked::Now(v) => v.into_iter().next(),
                         Picked::Later => return Some(Ok(Value::Null)),
-                        Picked::Unavailable => return Some(Err("no file dialog on this platform".into())),
+                        Picked::Unavailable | Picked::Failed(_) => return Some(Err("no file dialog on this platform".into())),
                     }
                 }
             };
@@ -1963,7 +1965,7 @@ fn photo_locate_command(app: &mut LightcraftApp, p: &Value) -> Result<Value, Str
             let req = PickRequest::file(crate::i18n::tr("Locate Missing File…"), crate::i18n::tr("Photos"), lightcraft_engine::import::EXTENSIONS);
             match crate::pick::ask(app, "photo.locate", p, "path", req, |s| s.pick_files.as_mut().map(|f| f())) {
                 Picked::Now(v) => v.into_iter().next(),
-                Picked::Later | Picked::Unavailable => None,
+                Picked::Later | Picked::Unavailable | Picked::Failed(_) => None,
             }
         }
     };
@@ -2025,6 +2027,7 @@ fn photo_tag_from_tracklog_command(app: &mut LightcraftApp, _ctx: &egui::Context
             let req = PickRequest::file(crate::i18n::tr("Auto-Tag from Tracklog"), crate::i18n::tr("GPS Track Log"), &["gpx"]);
             match crate::pick::ask(app, id, p, "path", req, |s| s.pick_tracklog.as_mut().map(|f| f())) {
                 Picked::Now(v) => v.into_iter().next(),
+                Picked::Failed(e) => return Err(format!("the file dialog couldn't open: {e}")),
                 Picked::Unavailable if app.services.pick_tracklog.is_none() => return Err(NO_FILE_DIALOG.into()),
                 Picked::Later | Picked::Unavailable => None,
             }
@@ -2081,7 +2084,7 @@ fn paths_or_pick(
         None => match crate::pick::ask(app, id, p, "paths", request, now) {
             Picked::Now(paths) => paths,
             Picked::Later => return Err(Ok(Value::Null)),
-            Picked::Unavailable => return Err(Err("no file dialog on this platform".into())),
+            Picked::Unavailable | Picked::Failed(_) => return Err(Err("no file dialog on this platform".into())),
         },
     };
     if paths.is_empty() {
@@ -2257,7 +2260,7 @@ fn file_import_keywords_command(app: &mut LightcraftApp, ctx: &egui::Context, id
                     None => return Ok(Value::Null),
                 },
                 Picked::Later => return Ok(Value::Null),
-                Picked::Unavailable => return Err("no file dialog on this platform".into()),
+                Picked::Unavailable | Picked::Failed(_) => return Err("no file dialog on this platform".into()),
             }
         }
     };
@@ -2289,7 +2292,7 @@ fn file_export_keywords_command(app: &mut LightcraftApp, ctx: &egui::Context, id
                     None => return Ok(Value::Null),
                 },
                 Picked::Later => return Ok(Value::Null),
-                Picked::Unavailable => return Err("no file dialog on this platform".into()),
+                Picked::Unavailable | Picked::Failed(_) => return Err("no file dialog on this platform".into()),
             }
         }
     };
@@ -2337,7 +2340,7 @@ fn file_export_mask_effects_command(app: &mut LightcraftApp, ctx: &egui::Context
             match crate::pick::ask(app, id, p, "path", req, |s| s.save_preset_file.as_mut().map(|f| f(&name).into_iter().collect())) {
                 Picked::Now(v) => v.into_iter().next(),
                 Picked::Later => return Ok(Value::Null),
-                Picked::Unavailable => return Err("no file dialog on this platform".into()),
+                Picked::Unavailable | Picked::Failed(_) => return Err("no file dialog on this platform".into()),
             }
         }
     };
@@ -2401,7 +2404,7 @@ fn file_export_curve_presets_command(app: &mut LightcraftApp, ctx: &egui::Contex
             }) {
                 Picked::Now(v) => v.into_iter().next(),
                 Picked::Later => return Ok(Value::Null),
-                Picked::Unavailable => return Err("no file dialog on this platform".into()),
+                Picked::Unavailable | Picked::Failed(_) => return Err("no file dialog on this platform".into()),
             }
         }
     };
