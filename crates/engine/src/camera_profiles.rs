@@ -1,6 +1,7 @@
 //! Camera colour profiles of our own, pooled from many photos of one camera model.
 //!
-//! A raw file without colour matrices (Sony ARW, Nikon NEF, Fujifilm RAF, Canon CRW) gets its look fitted to its own embedded camera
+//! A raw file without colour matrices (Sony ARW, Nikon NEF, Fujifilm RAF, Panasonic RW2, Canon CR2 / CR3 / CRW and
+//! the other formats in [`CALIBRATION_EXTENSIONS`]) gets its look fitted to its own embedded camera
 //! JPEG (`camera_preview`), but one photo shows too little of some colours: a lime shirt covering a
 //! few dozen proxy pixels next to a hillside of foliage at the same hue. `lightcraft-cli calibrate`
 //! pools the colour pairs of many photos per model and fits one matrix and hue/saturation/value
@@ -312,6 +313,11 @@ pub struct Added {
 /// Most colour pairs (and, separately, tone samples) kept per photo, so a few busy photos can't dominate a profile.
 const PAIRS_PER_FILE: usize = 4000;
 
+/// Extensions (lower case) of the raw formats [`Pool::add`] can read a look from: the ones whose own
+/// camera JPEG the profile fit reads. `lightcraft-cli calibrate` collects these, so a format the fit
+/// supports is not silently left out of a calibration run.
+pub const CALIBRATION_EXTENSIONS: &[&str] = &["arw", "nef", "nrw", "rw2", "rwl", "raf", "cr3", "cr2", "pef", "srw", "orf", "crw", "mrw", "erf"];
+
 /// Every `n`-th item, `n` chosen to keep at most [`PAIRS_PER_FILE`].
 fn thinned<T>(items: Vec<T>) -> impl Iterator<Item = T> {
     let step = items.len().div_ceil(PAIRS_PER_FILE).max(1);
@@ -321,8 +327,7 @@ fn thinned<T>(items: Vec<T>) -> impl Iterator<Item = T> {
 impl Pool {
     /// Add one raw file's colour pairs and tone samples. A photo too dark or colourless for colour pairs still gives
     /// its tone samples (the shadows the pooled curve needs) without counting toward the profile's photos. `Ok(None)`
-    /// when the file can't contribute (not an ARW, NEF or RAF without colour matrices, no usable or a black-and-white
-    /// camera JPEG).
+    /// when the file can't contribute (not a raw without colour matrices, no usable or a black-and-white camera JPEG).
     pub fn add(&mut self, bytes: &[u8]) -> Result<Option<Added>, String> {
         let mut raw = lightcraft_raw::decode(bytes).map_err(|e| e.to_string())?;
         // colour only: geometric lens corrections would stop the sensor proxy from binning (the pairs still follow
