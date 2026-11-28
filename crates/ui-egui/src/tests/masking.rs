@@ -771,6 +771,55 @@ fn brush_strokes_carry_auto_mask() {
     h.settle(SETTLE);
 }
 
+/// On a photo cropped to its middle half each way, the brush and Remove cursors are drawn at the radius
+/// the render paints with, measured on the uncropped photo's long edge (#3957), not on the
+/// cropped frame's.
+#[test]
+fn cursors_on_a_cropped_photo_are_the_size_the_render_paints() {
+    // crop to the middle half each way, rest the pointer on the photo, and read the white circles drawn
+    let measure = |h: &mut Headless| {
+        exec(h, "crop.set", json!({"rect": [0.25, 0.25, 0.75, 0.75]}));
+        h.settle(SETTLE);
+        let img = h.app.widgets.iter().find(|(w, _)| w == "canvas:image").map(|(_, r)| *r).expect("the photo on screen");
+        h.app.synthetic.push(egui::Event::PointerMoved(img.center()));
+        h.step();
+        h.step();
+        let radii: Vec<f32> = h
+            .view
+            .painted_shapes()
+            .iter()
+            .filter_map(|s| match s {
+                egui::epaint::Shape::Circle(c) if c.stroke.color == egui::Color32::WHITE => Some(c.radius),
+                _ => None,
+            })
+            .collect();
+        // the crop shows half of each edge: the uncropped long edge is twice the shown one
+        (2.0 * img.width().max(img.height()), radii)
+    };
+    for panel in ["panel.masking", "panel.remove"] {
+        let mut h = detail(panel);
+        if panel == "panel.masking" {
+            exec(&mut h, "tool.brush", json!({}));
+        }
+        let (long, radii) = measure(&mut h);
+        let size = if panel == "panel.masking" { h.app.ui.brush_size } else { h.app.ui.remove_size };
+        // (the Remove brush draws its outline 3 points outside its edge, `retouch::OUTLINE_GAP`)
+        let want = size * long + if panel == "panel.remove" { 3.0 } else { 0.0 };
+        assert!(radii.iter().any(|r| (r - want).abs() < 0.5), "{panel}: cursor radius {want} not among {radii:?}");
+    }
+    // the Lens Blur Focus brush on the Edit panel, whose strokes render the same way
+    let mut h = detail("panel.masking");
+    assert_eq!(h.request("ui.resize", json!({"width": 1200, "height": 1400}), T)["ok"], true);
+    let r = h.request("ui.set", json!({"right": "edit", "openSections": ["lensBlur"], "histogram": false}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    click(&mut h, "check:lensBlur.enabled");
+    click(&mut h, "button:lensBlurFocus");
+    assert_eq!(h.app.ui.tool, "lensBlurFocus");
+    let (long, radii) = measure(&mut h);
+    let want = h.app.ui.brush_size * long;
+    assert!(radii.iter().any(|r| (r - want).abs() < 0.5), "Lens Blur: cursor radius {want} not among {radii:?}");
+}
+
 #[test]
 fn remove_spots_by_pointer_and_keyboard() {
     let mut h = detail("panel.remove");

@@ -808,6 +808,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-08 | patch | LR-MASK-BRUSH, LR-REM-BRUSH-PARAMS: on a cropped photo the brush and Remove cursors are drawn at the size the render paints (stroke and spot sizes are in units of the uncropped photo's long edge, `CanvasMap::per_long`); they were drawn from the cropped frame's long edge, so strokes painted larger than the circle shown; the ⌃⌥-drag size preview and the Lens Blur Focus cursor likewise (`a_brush_cursor_on_a_cropped_photo_is_the_size_the_render_paints`, `cursors_on_a_cropped_photo_are_the_size_the_render_paints`) |
 | 2026-11-19 | minor | LR-EDIT-OPTICS-DEFRINGE: AI Defringe (beyond Lightroom), a user-installed defringe network with a cached per-photo correction; no model ships; status unchanged |
 | 2026-10-29 | minor | MENU-EDIT-SELECTBY: Edit → Select by lists each rating on its own (★ only … ★★★★★ only, `library.selectBy` with `ratingOp: eq`) after the "and higher" rows, beside Unrated (#3311); status unchanged (✅) |
 | 2026-11-15 | patch | LR-PRE-AMOUNT: Amount blends tone curves, fades in the strength of a profile/LUT or switched-on group a preset changes, and takes white balance on another scale whole (#2669); the step at half amount for switches and choices stays (#2207); status unchanged (✅) |

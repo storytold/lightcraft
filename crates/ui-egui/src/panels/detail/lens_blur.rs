@@ -85,7 +85,8 @@ pub(super) fn lens_blur_shape_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui
 /// painted (green: Focus, red: Blur), committed as `lensBlur.brushStroke` when the drag ends.
 /// ⌥ (Alt) erases what the brush painted.
 pub(super) fn lens_blur_brush_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap) {
-    let long = (map.rect.width().max(map.rect.height())) as f64;
+    // sized as the render sizes the stroke: on the uncropped photo's long edge
+    let long = map.per_long() as f64;
     let clip = app.canvas_rect.unwrap_or(map.rect);
     let p = &ui.painter_at(clip);
     let focus = app.ui.tool == "lensBlurFocus";
