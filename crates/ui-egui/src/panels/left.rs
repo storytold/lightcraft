@@ -19,8 +19,10 @@ mod local;
 mod rows;
 mod sections;
 
+use albums::albums_rows;
+pub(crate) use albums::drag_auto_scroll;
+pub(crate) use albums::forget_hover;
 pub use albums::{album_drag_feedback, auto_scroll_speed};
-use albums::{albums_rows, drag_auto_scroll};
 pub(crate) use dates::browse_all_photos;
 use dates::date_rows;
 pub(crate) use folders::{created_text, folder_row_of, move_photos, moved_text};
@@ -165,12 +167,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         let tree = app.caches.folder_tree(&app.session.catalog);
                         section(app, ui, s, tree.len(), |app, ui| {
                             reveal_chosen(app, ui, &tree);
-                            folder_rows(app, ui, &tree, 0.0);
+                            folder_rows(app, ui, &tree, 0.0, None);
                         })
                     }
                     SidebarSection::Keywords => {
                         let tree = app.caches.keyword_tree(&app.session.catalog);
-                        section(app, ui, s, tree.len(), |app, ui| keyword_rows(app, ui, &tree, 0.0))
+                        section(app, ui, s, tree.len(), |app, ui| keyword_rows(app, ui, &tree, 0.0, None))
                     }
                 };
                 placed.push(at);

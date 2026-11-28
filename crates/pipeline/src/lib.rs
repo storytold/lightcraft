@@ -129,6 +129,26 @@ impl Default for SourceInfo {
     }
 }
 
+/// How a render shrinks its source to the output size.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Downscale {
+    /// Mitchell–Netravali: soft, no visible ringing. Previews and thumbnails.
+    #[default]
+    Smooth,
+    /// Lanczos-3: keeps the detail a smaller output can hold, as a dedicated downscale does
+    /// (exports, #2970). Its slight overshoot at hard edges stays below the output sharpening's.
+    Sharp,
+}
+
+impl Downscale {
+    pub fn filter(self) -> lightcraft_raster::resample::Filter {
+        match self {
+            Downscale::Smooth => lightcraft_raster::resample::Filter::Mitchell,
+            Downscale::Sharp => lightcraft_raster::resample::Filter::Lanczos3,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Quality {
     /// Interactive drags: skips the most expensive refinements.
@@ -162,6 +182,8 @@ pub struct RenderRequest {
     /// Previews for a monitor with a display profile: render 8-bit into its primaries instead of
     /// `space` (see [`DisplaySpace`]; ignored by deep renders).
     pub display: Option<DisplaySpace>,
+    /// Filter of the downscale to the output size.
+    pub downscale: Downscale,
 }
 
 /// A window of the (virtual) full output, in its pixels: what a zoomed view needs, rendered
@@ -236,6 +258,7 @@ impl RenderRequest {
             proof: None,
             window: None,
             display: None,
+            downscale: Downscale::Smooth,
         }
     }
 
@@ -491,7 +514,8 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         }
     }
     let s = &*settings;
-    let frame = frame_for(src, info, s, req.apply_crop);
+    let mut frame = frame_for(src, info, s, req.apply_crop);
+    frame.downscale = req.downscale.filter();
     let (full_w, full_h) = req.size(&frame);
     // sizes and scale are those of the whole output; a window only narrows what is drawn
     let px_per_long = frame.px_per_long(full_w);
@@ -652,6 +676,24 @@ pub fn lin_cpu(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
     optics::defringe(img, s, p.px_per_long / optics::DEFRINGE_REF_LONG);
     spots::apply(img, &s.spots, &p.frame, p.px_per_long, spots::HealMethod::of(s));
     redeye::apply(img, &p.eyes);
+}
+
+/// The picture the AI Defringe model reads ([`lightcraft_denoise::defringe`], docs/ai-defringe.md): `s` rendered for
+/// `req` up to the Defringe stage (resampled, white balance, exposure, lateral chromatic aberration corrected), with
+/// the Defringe sliders left out; and the frame it was sampled through, whose [`geometry::Frame::source_map`] says which
+/// source pixel each plane of each of its pixels came from.
+pub fn defringe_tap(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest) -> (Rgb32f, geometry::Frame) {
+    let effective = s.effective();
+    let mut rendition = settings_for(&effective, req).into_owned();
+    rendition.optics.defringe_purple_amount = 0.0;
+    rendition.optics.defringe_green_amount = 0.0;
+    rendition.optics.remove_ca = true;
+    let plan = plan(src, info, &rendition, req);
+    let mut img = plan.frame.sample(src, plan.w, plan.h);
+    // `lin_cpu` up to the Defringe stage: retouching and red-eye come after it
+    local_tone::apply(&mut img, info, &plan);
+    local::white_balance(&mut img, info, &plan.settings);
+    (img, plan.frame)
 }
 
 /// The settings a render of `s` for `req` uses: the HDR edit for an [`OutputDepth::F32Hdr`]
