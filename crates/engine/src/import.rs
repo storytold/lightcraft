@@ -57,7 +57,7 @@ pub use files::{
 pub(crate) use files::{expand_noting, probe_all, probe_paths, probe_with};
 #[cfg(test)]
 use job::PreparedItem;
-pub use job::{ImportJob, Prepared, backup_folder_error, candidate_thumb_key, import, import_with};
+pub use job::{ImportJob, Prepared, backup_folder_error, backup_refusal, candidate_thumb_key, import, import_with};
 pub use reads::{MAX_SKIPPED, MAX_STUCK_READERS, ReadWatch, STALL_AFTER, StalledRead, StuckReaders};
 pub(crate) use scan::scan_files;
 pub use scan::{

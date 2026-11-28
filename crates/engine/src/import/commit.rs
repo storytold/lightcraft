@@ -172,19 +172,37 @@ fn run_transfer(t: Transfer, file_bytes: Option<&crate::merge::ByteReader>) -> P
             Err(e) => log::warn!("import {path}: copy as DNG: {e}"),
         }
     }
-    let backup = backup.map(|(root, to)| back_up(&stored, placed.as_ref(), &root, &to, if converted { None } else { info.content_hash.as_deref() }));
+    let backup =
+        backup.map(|(root, to)| back_up(&path, &stored, placed.as_ref(), &root, &to, if converted { None } else { info.content_hash.as_deref() }));
     PreparedItem::Ready(Box::new(ReadyFile { path, stored, info, sidecar, placed, backup }))
 }
 
 /// The backup copy of a file an import put at `stored` inside `root` — with a Move's sidecars beside
 /// it, so the backup holds what the destination does ([`crate::import_move::backup_copy`]); its path,
 /// or why it has none. `probe_hash` is the content hash of `stored` as the import read it (`None`:
-/// compared byte for byte).
-fn back_up(stored: &str, placed: Option<&crate::import_move::Placed>, root: &Path, to: &Path, probe_hash: Option<&str>) -> Result<String, String> {
+/// compared byte for byte). A backup place that is the file imported from (`source`) or one of its
+/// sidecars is no backup: the identical file found there is the original, which a Move removes.
+fn back_up(
+    source: &str,
+    stored: &str,
+    placed: Option<&crate::import_move::Placed>,
+    root: &Path,
+    to: &Path,
+    probe_hash: Option<&str>,
+) -> Result<String, String> {
     let expect = probe_hash.and_then(lightcraft_preview::Hash128::parse);
+    let same = |a: &Path, b: &Path| crate::import_move::resolved(a) == crate::import_move::resolved(b);
+    let is_source = |p: &Path| same(p, Path::new(source)) || placed.is_some_and(|pl| pl.sidecars.iter().any(|sc| same(p, &sc.src)));
+    let refuse = |p: &Path| format!("the backup's place {} is the original being imported: no backup copy was made", p.display());
     let copy = crate::import_move::backup_copy(Path::new(stored), root, to, expect)?;
+    if is_source(&copy) {
+        return Err(refuse(&copy));
+    }
     for sc in placed.map(|p| p.sidecars.as_slice()).unwrap_or_default() {
-        crate::import_move::backup_copy(&sc.dst, root, to, None)?;
+        let c = crate::import_move::backup_copy(&sc.dst, root, to, None)?;
+        if is_source(&c) {
+            return Err(refuse(&c));
+        }
     }
     Ok(copy.to_string_lossy().to_string())
 }
@@ -251,6 +269,7 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 if s.catalog.photo(id).is_some_and(|p| p.local) {
                     ops.push(Op::SetLocal { id, local: false });
                 }
+                note_no_backup_in_place(s, opts, id, &mut report);
                 // "Import as new": a trashed photo with the same content is replaced, as for a new file
                 let content =
                     fresh.as_ref().and_then(|i| i.content_hash.clone()).or_else(|| s.catalog.photo(id).and_then(|p| p.content_hash.clone()));
@@ -296,17 +315,7 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
             PreparedItem::Kept(k) => report.kept.push(k),
             PreparedItem::Ready(r) => {
                 let ReadyFile { path, stored, info, sidecar, placed: pl, backup } = *r;
-                let no_backup = match backup {
-                    Some(Ok(to)) => {
-                        report.backups.push(BackupCopy { path: stored.clone(), to });
-                        None
-                    }
-                    Some(Err(reason)) => {
-                        report.backup_failed.push(Kept { path: path.clone(), reason: reason.clone() });
-                        Some(reason)
-                    }
-                    None => None,
-                };
+                let no_backup = note_backup(&mut report, &path, &stored, backup);
                 placed.extend(pl.map(|p| (p, no_backup)));
                 let id = s.catalog.alloc_photo_id();
                 if let Some(h) = &info.content_hash {
@@ -395,6 +404,32 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
         finish_moves(s, placed, log0, &mut report);
     }
     Ok(report)
+}
+
+/// A file's backup outcome into the report; why it has none, if it has none.
+fn note_backup(report: &mut ImportReport, path: &str, stored: &str, backup: Option<Result<String, String>>) -> Option<String> {
+    match backup? {
+        Ok(to) => {
+            report.backups.push(BackupCopy { path: stored.to_string(), to });
+            None
+        }
+        Err(reason) => {
+            report.backup_failed.push(Kept { path: path.to_string(), reason: reason.clone() });
+            Some(reason)
+        }
+    }
+}
+
+/// A photo browsed in Local joins the library where it is, even in a Copy or Move import: with a
+/// backup folder, the report says it has no backup copy.
+fn note_no_backup_in_place(s: &Session, opts: &ImportOptions, id: PhotoId, report: &mut ImportReport) {
+    if opts.backup.as_deref().is_some_and(|b| !b.trim().is_empty())
+        && matches!(opts.mode, super::ImportMode::Copy | super::ImportMode::Move)
+        && let Some(Source::File { path }) = s.catalog.photo(id).map(|p| &p.source)
+    {
+        let reason = "a photo browsed in Local is added where it is, so no backup copy was made".to_string();
+        report.backup_failed.push(Kept { path: path.clone(), reason });
+    }
 }
 
 /// Move, after the commit: save the library, then remove each source whose destination is

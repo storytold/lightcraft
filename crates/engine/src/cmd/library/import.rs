@@ -101,6 +101,10 @@ pub fn import_params(s: &Session, p: &Value) -> Result<ImportRequest> {
         read_duplicates: false,
         recipe: crate::cmd::recipe_param(p, "library.import")?,
     };
+    // (here, not only when the import starts: the dialog creates a new album after this check)
+    if let Some(e) = crate::import::backup_refusal(s, &opts) {
+        return Err(bad("library.import", e));
+    }
     let album_name = str_param(p, "albumName").map(str::trim).filter(|n| !n.is_empty()).map(str::to_string);
     Ok(ImportRequest { paths, opts, album, album_name })
 }

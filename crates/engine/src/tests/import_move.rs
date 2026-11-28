@@ -615,6 +615,20 @@ fn a_bad_backup_copy_is_caught_and_a_move_keeps_its_original() {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    // a backup folder that is the card itself: the original sits at the backup's place with the same
+    // bytes, but it is the file being moved, not a backup of it, so it is kept
+    let base = temp_dir("backup-is-source");
+    let (card, dest) = (base.join("card"), base.join("out"));
+    write_png(&card.join("a.png"), 9);
+    let mut s = session();
+    let r = import_move(&mut s, &[&card], &dest, json!({"organize": "flat", "backup": card.to_string_lossy()}));
+    assert_eq!(len(&r, "imported"), 1, "{r}");
+    assert_eq!(len(&r, "backups"), 0, "{r}");
+    assert!(r["backupFailed"][0]["reason"].as_str().unwrap().contains("the original"), "{r}");
+    assert_eq!(len(&r, "moved"), 0, "{r}");
+    assert!(card.join("a.png").is_file(), "the original stays: {r}");
+    let _ = std::fs::remove_dir_all(&base);
+
     let base = temp_dir("backup-taken");
     let (card, dest, backup) = (base.join("card"), base.join("out"), base.join("bk"));
     write_png(&card.join("a.png"), 6);

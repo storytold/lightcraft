@@ -113,6 +113,26 @@ pub(crate) fn inside(path: &Path, dir: &Path) -> bool {
     }
 }
 
+/// `path` with symbolic links and `..` resolved, also when it doesn't exist yet: its nearest
+/// existing ancestor resolved, with the rest of the path after it (a folder an import is about to
+/// create still lands where its existing parent's links point).
+pub(crate) fn resolved(path: &Path) -> PathBuf {
+    let mut rest = Vec::new();
+    let mut at = path;
+    loop {
+        if let Ok(real) = fs::canonicalize(at) {
+            return rest.iter().rev().fold(real, |p, part| p.join(part));
+        }
+        match (at.parent(), at.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_os_string());
+                at = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
+}
+
 pub(crate) fn is_symlink(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
 }

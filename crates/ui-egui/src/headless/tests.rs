@@ -4262,6 +4262,42 @@ fn import_copy_with_a_backup_folder() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// A backup folder inside the destination is refused when the import is confirmed, before the
+/// dialog creates the new album it names: a refused import leaves no empty album behind.
+#[test]
+fn a_refused_backup_folder_creates_no_album() {
+    let base = std::env::temp_dir().join(format!("lc-ui-import-backup-refused-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let (src, dest) = (base.join("card"), base.join("out"));
+    std::fs::create_dir_all(&src).unwrap();
+    let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[90, 7, 9, 255]; 64] };
+    let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+    std::fs::write(src.join("IMG_01.png"), png).unwrap();
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo().with_fs(), crate::Services::default());
+    app.ui.view = crate::state::ViewMode::PhotoGrid;
+    let mut h = Headless::new(app, [1300.0, 900.0], 1.0);
+    let t = Duration::from_secs(10);
+    let r = h.request("engine.execute", json!({"command": "file.addPhotos", "params": {"paths": [src.to_string_lossy()]}}), t);
+    assert_eq!(r["result"]["scanning"], true, "{r}");
+    h.settle(SETTLE);
+    h.step_until(SETTLE, |h| matches!(h.app.ui.dialog, Some(crate::state::Dialog::Import { .. })));
+    if let Some(crate::state::Dialog::Import { opts }) = &mut h.app.ui.dialog {
+        opts.set_transfer(true, false);
+        opts.destination = dest.to_string_lossy().to_string();
+        opts.backup = dest.join("bk").to_string_lossy().to_string();
+        opts.new_album = "Backup refused".into();
+    } else {
+        panic!("no import dialog");
+    }
+    let albums = h.app.session.catalog.albums().count();
+    let r = h.request("ui.dialog.confirm", json!({}), t);
+    assert_eq!(r["ok"], false, "refused: {r}");
+    assert!(r.to_string().contains("outside the destination"), "{r}");
+    assert_eq!(h.app.session.catalog.albums().count(), albums, "no album was created");
+    assert!(h.app.import.is_none(), "nothing started");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// The instant this machine reads as the tests' clock time: an undated file takes the file's
 /// date in the host's zone, so a fixed epoch would file it on the day before west of UTC.
 fn filed_at() -> u64 {

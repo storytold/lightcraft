@@ -178,8 +178,25 @@ pub fn backup_folder_error(mode: ImportMode, transfer: bool, root: Option<&Path>
         return Some("this library keeps its photos in its own storage, so no backup copy can be made".into());
     }
     let root = root?;
-    (crate::import_move::inside(backup, root) || crate::import_move::inside(root, backup))
+    // (also once links are resolved, for a backup folder that doesn't exist yet)
+    let (b, r) = (crate::import_move::resolved(backup), crate::import_move::resolved(root));
+    (crate::import_move::inside(backup, root) || crate::import_move::inside(root, backup) || b.starts_with(&r) || r.starts_with(&b))
         .then(|| format!("the backup folder {} must be outside the destination {} and not contain it", backup.display(), root.display()))
+}
+
+/// Why `opts.backup` can't be this import's backup folder in `s`, if it can't ([`backup_folder_error`]
+/// with the mode and destination the import will use). `None` without a backup folder.
+pub fn backup_refusal(s: &Session, opts: &ImportOptions) -> Option<String> {
+    let backup = opts.backup.as_deref().map(str::trim).filter(|b| !b.is_empty())?;
+    let transfer = matches!(opts.mode, ImportMode::Copy | ImportMode::Move);
+    let mode = if transfer && s.library.as_ref().is_some_and(|l| !l.on_disk) { ImportMode::Add } else { opts.mode };
+    let root = opts
+        .destination
+        .as_deref()
+        .filter(|d| !d.trim().is_empty())
+        .map(PathBuf::from)
+        .or_else(|| s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.join("Originals")));
+    backup_folder_error(mode, transfer, root.as_deref(), Path::new(backup))
 }
 
 fn normalize_import_path(path: &str) -> String {
@@ -213,9 +230,7 @@ impl ImportJob {
             return Err(crate::EngineError::Other("copying or moving needs a destination folder or an open library".into()));
         }
         let backup_root = opts.backup.as_deref().map(str::trim).filter(|b| !b.is_empty()).map(PathBuf::from);
-        if let Some(b) = &backup_root
-            && let Some(e) = backup_folder_error(mode, transfer, copy_root.as_deref(), b)
-        {
+        if let Some(e) = backup_refusal(s, &opts) {
             return Err(crate::cmd::bad("library.import", e));
         }
         let fresh = opts.on_deleted == OnDeleted::Fresh;
