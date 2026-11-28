@@ -178,9 +178,10 @@ pub fn backup_folder_error(mode: ImportMode, transfer: bool, root: Option<&Path>
         return Some("this library keeps its photos in its own storage, so no backup copy can be made".into());
     }
     let root = root?;
-    // (also once links are resolved, for a backup folder that doesn't exist yet)
+    // (compared resolved: absolute, links and `..` followed, also for a folder that doesn't exist yet,
+    // so `<root>/../bk` beside the destination is no overlap)
     let (b, r) = (crate::import_move::compare_key(backup), crate::import_move::compare_key(root));
-    (crate::import_move::inside(backup, root) || crate::import_move::inside(root, backup) || b.starts_with(&r) || r.starts_with(&b))
+    (b.starts_with(&r) || r.starts_with(&b))
         .then(|| format!("the backup folder {} must be outside the destination {} and not contain it", backup.display(), root.display()))
 }
 

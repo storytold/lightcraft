@@ -696,6 +696,8 @@ fn a_backup_inside_a_destination_that_does_not_exist_yet_is_refused() {
     // the same folder in other letter case: the same folder on Windows, another one elsewhere
     let shouted = top.join(absent.to_uppercase()).join("OUT").join("bk");
     assert_eq!(backup_folder_error(ImportMode::Copy, true, Some(&dest), &shouted).is_some(), cfg!(windows), "{}", shouted.display());
-    // a folder beside the destination is still a backup folder
+    // a folder beside the destination is still a backup folder, also when it is named through it
     assert!(backup_folder_error(ImportMode::Copy, true, Some(&dest), &top.join(&absent).join("bk")).is_none());
+    let beside = dest.join("..").join("bk");
+    assert!(backup_folder_error(ImportMode::Copy, true, Some(&dest), &beside).is_none(), "{}", beside.display());
 }
