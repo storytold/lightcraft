@@ -219,7 +219,7 @@ fn culling_again_keeps_bursts_arranged_by_hand() {
         let mut ids: Vec<PhotoId> = r["imported"].as_array().unwrap().iter().filter_map(Value::as_u64).map(PhotoId).collect();
         ids.sort_by_key(|id| s.catalog.photo(*id).unwrap().file_name.clone());
         for (i, id) in ids.iter().enumerate() {
-            s.commit("t", Op::SetCaptured { id: *id, captured: Some(format!("2026-05-01T{hour:02}:00:0{i}")) }).unwrap();
+            s.commit("t", Op::SetCaptured { id: *id, captured: Some(format!("2026-05-01T{hour:02}:00:0{i}")), manual: false }).unwrap();
         }
         ids
     };

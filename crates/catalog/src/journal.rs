@@ -68,6 +68,7 @@
 //! | 12 | history steps and versions share segmentation grids (#2154) | `Catalog.grids`, `SegMask.grid` |
 //! | 13 | Lens Blur | `DevelopSettings.lens_blur`, `Mask.adjust.lens_blur` |
 //! | 14 | bursts arranged by hand in Assisted Culling | `Analysis.rank` |
+//! | 15 | capture-time manual edit | `Photo.captured_manual`, `Op::SetCaptured.manual` |
 //!
 //! Rules:
 //! - **Bump [`VERSION`]** (and add a row above) in the change that adds an [`Op`] variant or a
@@ -112,7 +113,7 @@ pub const LOG: &str = "catalog.log";
 const FORMAT: &str = "lightcraft-catalog";
 /// The catalog format this build writes (and the newest it reads). See the module docs →
 /// *Format versions*; bump it whenever an [`Op`] variant or a serialized field is added.
-pub const VERSION: u32 = 14;
+pub const VERSION: u32 = 15;
 
 /// When [`Journal::wants_snapshot`] says it's time to compact the log.
 #[derive(Clone, Copy, Debug)]
@@ -525,6 +526,11 @@ impl Journal {
                 report.repaired = catalog.repair();
                 for r in &report.repaired {
                     log::warn!("{SNAPSHOT}: {r}");
+                }
+                // Catalogs created before format v10 didn't track whether capture times were file-derived
+                // or manual user edits. Mark snapshot capture times as manual so reloads preserve them.
+                if h.version < 10 {
+                    catalog.mark_captured_manual_for_upgrade();
                 }
                 (catalog, s.seq, Some(h.version))
             }

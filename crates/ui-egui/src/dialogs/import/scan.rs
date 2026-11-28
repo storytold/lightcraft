@@ -233,9 +233,11 @@ pub fn browse(app: &mut LightcraftApp, path: &str, subfolders: Option<bool>) -> 
         // the files the library knows come too, marked as such: the folder bookkeeping (browse
         // times, records of files gone) needs the whole listing; only the queue is imported
         let queued: std::collections::HashSet<&String> = queue.iter().collect();
-        let known: Vec<String> = files.iter().filter(|f| !queued.contains(f)).cloned().collect();
-        let known =
-            known.into_iter().map(|path| lightcraft_engine::import::ImportCandidate { path, duplicate: Some("path".into()), ..Default::default() });
+        let known_paths: Vec<String> = files.iter().filter(|f| !queued.contains(f)).cloned().collect();
+        let Some(known) = lightcraft_engine::import::browse_known_until(&input, &known_paths, &p.cancel) else {
+            let _ = tx.send(ScanEnd::Stopped { probes: input.take_probes(), failed: false });
+            return;
+        };
         let candidates =
             queue.iter().cloned().map(|path| lightcraft_engine::import::ImportCandidate { path, ..Default::default() }).chain(known).collect();
         // the probes of earlier scans go back to the session with the result, for the import that follows
@@ -356,6 +358,26 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
         if let Some(b) = app.session.browse.clone() {
             let listed: Vec<String> = out.candidates.iter().map(|c| c.path.clone()).collect();
             app.session.forget_gone_from(&b.path, b.subfolders, &listed);
+        }
+        // Reload local photos in this folder whose file on disk has changed size:
+        let mut stale: std::collections::BTreeSet<lightcraft_catalog::PhotoId> = std::collections::BTreeSet::new();
+        for c in out.candidates.iter().filter(|c| c.duplicate == Some("path".into())) {
+            let Some(existing_id) = c.existing else { continue };
+            let Some(mut ph) = app.session.catalog.photo(lightcraft_catalog::PhotoId(existing_id)) else { continue };
+            if let Some(master_id) = ph.copy_of {
+                let Some(master) = app.session.catalog.photo(master_id) else { continue };
+                ph = master;
+            }
+            if !ph.local || ph.deleted {
+                continue;
+            }
+            if c.file_size != ph.file_size {
+                stale.insert(ph.id);
+            }
+        }
+        if !stale.is_empty() {
+            let ids: Vec<serde_json::Value> = stale.iter().map(|id| serde_json::json!(id.0)).collect();
+            let _ = app.run("photo.reload", serde_json::json!({"ids": ids}));
         }
         // what the library doesn't know yet joins the Local view
         let queue: Vec<String> =

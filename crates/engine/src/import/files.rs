@@ -395,7 +395,7 @@ pub(crate) enum Seen {
 }
 
 /// [`Seen`] of `path` from the file system.
-fn stat_file(path: &str) -> Seen {
+pub(super) fn stat_file(path: &str) -> Seen {
     match std::fs::metadata(path) {
         Ok(m) => Seen::At { is_file: m.is_file(), len: m.len() },
         Err(_) => Seen::Gone,
