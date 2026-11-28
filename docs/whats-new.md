@@ -9,6 +9,11 @@
 
 ## Unreleased
 
+### Brush Flow as in Lightroom (process 15)
+- Flow now builds up the way it does in Lightroom: one stroke at Flow 25 covers a little under half, at Flow 50 about
+  three quarters, where it used to cover 90 % and more, and a slow stroke covers the same as a fast one (issue #4045).
+  New photos (and Reset) get it; photos you already edited keep their brushes until Photo ▸ Update to Current Process.
+
 ### Scripted imports say what they skipped
 - `library.import` now reports what its folder walk left out, `skipped: {unreadable, unsupported}`, as
   `library.importPreview` already did, so a script or MCP client can tell a skipped file from a missing one (#4319).

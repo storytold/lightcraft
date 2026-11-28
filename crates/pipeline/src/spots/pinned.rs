@@ -301,8 +301,10 @@ mod tests {
         for p in [Process::V8, Process::V10, Process::V13] {
             assert_eq!(HealMethod::of(&on(p)), HealMethod::Averaged, "{p:?}");
         }
-        assert_eq!(HealMethod::of(&on(Process::V14)), HealMethod::Pinned);
-        assert_eq!(Process::LATEST, Process::V14);
+        // V14 and every later process keep the pinned heal
+        for p in Process::ALL.into_iter().filter(|p| *p >= Process::V14) {
+            assert_eq!(HealMethod::of(&on(p)), HealMethod::Pinned, "{p:?}");
+        }
         assert_eq!(HealMethod::of(&DevelopSettings::default()), HealMethod::Pinned, "new photos get the latest process");
     }
 

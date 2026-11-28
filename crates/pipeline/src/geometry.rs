@@ -37,6 +37,9 @@ pub struct Frame {
     /// `lightcraft_develop::Mask::on_photo`); otherwise they are normalized coordinates of this
     /// frame's transformed image, like spots and the crop.
     pub masks_on_photo: bool,
+    /// Brush Flow is coverage per brush radius travelled (process V15, [`crate::masks::flow_per_radius`]),
+    /// not per dab.
+    pub brush_flow_per_radius: bool,
     /// Filter of the area downscale ahead of the bilinear resample ([`Frame::sample`]); see
     /// [`crate::Downscale`].
     pub downscale: Filter,
@@ -85,6 +88,7 @@ impl Frame {
             warp: (!warp.is_identity()).then_some(warp),
             view: None,
             masks_on_photo: false,
+            brush_flow_per_radius: crate::masks::flow_per_radius(s),
             downscale: Filter::Mitchell,
         };
         if apply_crop {
