@@ -9,6 +9,11 @@
 
 ## Unreleased
 
+### JPEG brackets merge in linear light
+- Photo ▸ Photo Merge ▸ HDR… now works out the tone curve the camera applied to JPEG brackets, from the bracket
+  itself, and undoes it before merging, so the frames agree about each part of the scene and gradients no longer
+  band or bend. It needs the photos' exposure times; brackets without them merge as before (#4853).
+
 ### Scripted imports say what they skipped
 - `library.import` now reports what its folder walk left out, `skipped: {unreadable, unsupported}`, as
   `library.importPreview` already did, so a script or MCP client can tell a skipped file from a missing one (#4319).

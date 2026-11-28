@@ -1,5 +1,5 @@
 //! Merge inputs: scene-linear frames decoded from raw files (camera RGB, before white balance) or
-//! standard images (linear light in the file's primaries), with their exposure from EXIF.
+//! standard images (the file's transfer function undone, in its primaries), with their exposure from EXIF.
 
 use lightcraft_color::Mat3;
 use lightcraft_geom::Orientation;
@@ -45,6 +45,10 @@ pub struct Frame {
     /// when the file doesn't say.
     pub exposure: Option<f64>,
     pub raw: bool,
+    /// The values come from a file's display encoding (an integer-coded standard image: JPEG, 8- or 16-bit TIFF or
+    /// PNG). Besides the transfer function the decoder undid, they may carry a camera's or an editor's tone curve,
+    /// which the HDR merge recovers from the bracket ([`crate::response`]). False for raws, float files and radiance.
+    pub display_referred: bool,
     pub color: FrameColor,
     /// How `image` must be rotated/flipped for display (`Normal` once applied).
     pub orientation: Orientation,
@@ -71,6 +75,7 @@ impl Frame {
             clip,
             exposure,
             raw: false,
+            display_referred: false,
             color: FrameColor::Linear { to_xyz_d50 },
             orientation: Orientation::Normal,
             metadata: Metadata::default(),
@@ -188,6 +193,7 @@ pub fn load_frame_with(bytes: &[u8], max_edge: Option<usize>, orient: bool, colo
         clip,
         exposure,
         raw: false,
+        display_referred: !d.float,
         color: FrameColor::Linear { to_xyz_d50: d.space.to_xyz_d50 },
         orientation: Orientation::from_exif(d.orientation),
         metadata,
@@ -246,6 +252,7 @@ fn raw_frame(
         clip,
         exposure,
         raw: true,
+        display_referred: false,
         color: FrameColor::Camera(Box::new(raw.color.clone())),
         orientation: raw.orientation,
         metadata: if raw.metadata == Metadata::default() { metadata } else { raw.metadata.clone() },

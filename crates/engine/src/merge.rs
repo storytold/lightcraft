@@ -144,6 +144,7 @@ impl MergeJob {
                 let info = json!({
                     "reference": self.sources[r.reference].0.0,
                     "ev": r.ev, "evExif": r.ev_exif,
+                    "responseCurve": r.response.is_some(),
                     "alignment": r.alignments.iter().map(|a| json!({"model": a.model, "inliers": a.inliers, "rmsPx": a.rms})).collect::<Vec<_>>(),
                 });
                 let ghost = (!r.ghost.data.is_empty()).then(|| r.ghost.oriented(r.orientation));
@@ -186,6 +187,7 @@ impl MergeJob {
                         clip: f32::INFINITY,
                         exposure: None,
                         raw: r.raw,
+                        display_referred: false,
                         color: r.color,
                         orientation: r.orientation,
                         metadata: r.metadata,
