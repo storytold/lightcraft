@@ -289,6 +289,8 @@ is recorded here yet. Whether they should come before the file-local fit for the
 
 A smart preview keeps the result of the fit twice: the colour matrix is baked into its pixels and the tone and chroma curves are stored in its header. When the fit changes, a preview built earlier keeps the old look until it is rebuilt, and the render cache version does not reach it (renders are keyed on the library's files, proxies are files of their own).
 
+Version 27 introduced resolved-profile geometry for non-CR3 files. Version 28 extends it to eligible CR3s for file-local fits, pooled calibration and merge/DNG colour tags. Render cache version 89 invalidates thumbnails fitted with the earlier geometry. Existing Smart Previews keep the lens database identity recorded when their originals were decoded.
+
 The fit therefore has a version, `LOOK_VERSION` in `crates/engine/src/camera_preview.rs`, and every smart preview records the version that wrote it in its header line (`look_version`). **Bump the constant in any change that makes the fit give a different result for the same file**: the matrix, hue/saturation, tone or chroma fit, their gates and fallbacks, or how a camera profile feeds them. Changes that leave the fitted look alone don't need it. A header without the field (everything built before it existed) counts as version 0, and so does a value that is not a non-negative integer; a value from a newer build is left alone.
 
 A proxy older than the constant is brought up to date by the existing Build Smart Previews path (`smart_run`), which also repairs damaged proxies:
