@@ -9,6 +9,11 @@
 
 ## Unreleased
 
+### The crop shows its size in pixels
+- The Crop panel shows the size the crop leaves, in pixels (as a full-size export makes it, such as 2160 × 2700 px),
+  and dragging a crop handle shows it beside the pointer as it changes, so you can keep a minimum resolution while
+  you crop (issue #4106).
+
 ### Shift+Tab hides all the panels
 - Window ▸ Hide All Panels (Shift+Tab, Lightroom Classic's Toggle All Panels) hides the left sidebar, the right panel,
   the Presets column and the filmstrip; the next press brings back exactly what was shown, so a panel that was already

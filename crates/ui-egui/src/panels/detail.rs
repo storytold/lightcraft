@@ -27,10 +27,10 @@ mod window;
 
 pub(crate) use brush::settle_wheel_edit;
 use brush::{brush_drag, brush_wheel};
-pub(crate) use crop::crop_angle_label;
 use crop::crop_overlay;
 #[cfg(test)]
 pub(crate) use crop::readout_rect;
+pub(crate) use crop::{crop_angle_label, crop_size_text};
 #[cfg(test)]
 use crop::{flipped_corners, outside_crop_mesh, rotate_cursor_turn};
 #[cfg(test)]
