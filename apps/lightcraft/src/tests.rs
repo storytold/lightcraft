@@ -608,6 +608,61 @@ fn windows_links_open_in_the_browser() {
     assert_eq!(args, ["url.dll,FileProtocolHandler", url]);
 }
 
+/// A link opener is started and left to run: `open_url` returns while it still runs (an `xdg-open` that stays
+/// attached to the browser froze the window; review of #3694), and one that can't start is still an error.
+#[test]
+#[cfg(unix)]
+fn a_link_opener_is_not_waited_for() {
+    use crate::platform::launch;
+    let dir = std::env::temp_dir().join(format!("lc-link-opener-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (gate, passed) = (dir.join("gate"), dir.join("passed"));
+    // the opener waits at a gate this test opens only after `launch` has returned
+    let mut c = std::process::Command::new("sh");
+    c.arg("-c").arg(format!("while [ ! -e '{}' ]; do sleep 0.05; done; : > '{}'", gate.display(), passed.display()));
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(launch(c));
+    });
+    // (a watchdog, not a timing check: an opener that was waited for never returns at all)
+    let returned = rx.recv_timeout(std::time::Duration::from_secs(120));
+    let still_gated = !passed.exists();
+    std::fs::write(&gate, b"").unwrap();
+    assert_eq!(returned, Ok(Ok(())), "launch returned while its opener still waited at the gate");
+    assert!(still_gated, "the opener had not got past its gate when launch returned");
+    // and the opener was left running: it gets through the gate afterwards
+    for _ in 0..2400 {
+        if passed.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(passed.exists(), "the opener kept running after launch returned");
+    let _ = std::fs::remove_dir_all(&dir);
+    let missing = launch(std::process::Command::new("lc-no-such-opener"));
+    assert!(missing.as_ref().is_err_and(|e| e.starts_with("lc-no-such-opener: ")), "{missing:?}");
+}
+
+/// The desktop `open_url` service is the system's browser command started by `launch`: an `https://` link only,
+/// and on each system the command that hands it to the browser.
+#[test]
+fn open_url_hands_https_links_to_the_browser_command() {
+    assert!(crate::platform::open_url("http://example.com").is_err(), "only https links");
+    assert!(crate::platform::open_url("file:///etc/passwd").is_err());
+    let url = "https://github.com/storytold/lightcraft";
+    let c = crate::platform::open_url_command(url);
+    let program = c.get_program().to_string_lossy().to_string();
+    let want = if cfg!(target_os = "macos") {
+        "open"
+    } else if cfg!(target_os = "windows") {
+        "rundll32"
+    } else {
+        "xdg-open"
+    };
+    assert_eq!(program, want);
+    assert_eq!(c.get_args().last().map(|a| a.to_string_lossy().to_string()), Some(url.to_string()));
+}
+
 /// Issue #272: Explorer gets the file to select quoted after `/select,`, with backslashes and
 /// without the verbatim prefix, even when the path has spaces (else it opens Documents).
 #[test]
