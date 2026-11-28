@@ -76,6 +76,10 @@ pub fn import_params(s: &Session, p: &Value) -> Result<ImportRequest> {
         Some(n) => usize::try_from(n).map_err(|_| bad("library.import", "renameStart is too large for this platform"))?,
         None => 1,
     };
+    let backup = str_param(p, "backup").map(str::trim).filter(|b| !b.is_empty()).map(str::to_string);
+    if backup.is_some() && mode == crate::import::ImportMode::Add {
+        return Err(bad("library.import", "backup needs mode copy or move: adding in place copies nothing to back up"));
+    }
     let keywords = strs(p, "keywords");
     for k in &keywords {
         s.catalog.check_keyword_name(k).map_err(|e| bad("library.import", e.to_string()))?;
@@ -91,6 +95,7 @@ pub fn import_params(s: &Session, p: &Value) -> Result<ImportRequest> {
         rename_start,
         metadata_preset,
         convert_dng: bool_or(p, "dng", false),
+        backup,
         local: bool_or(p, "local", false),
         // (only the Lightroom import makes records of duplicates)
         read_duplicates: false,

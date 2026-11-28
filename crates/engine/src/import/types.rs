@@ -67,6 +67,11 @@ pub struct ImportOptions {
     pub metadata_preset: Option<String>,
     /// Copy: raws are copied as DNG (Copy as DNG).
     pub convert_dng: bool,
+    /// Copy or Move: a backup folder. Each file the import copies or moves into the destination is
+    /// copied here too, with the same folders and name as in the destination (a mirror of it, not a
+    /// folder of its own), and verified as the main copy is. A file the import adds where it is
+    /// gets none, and is reported ([`ImportReport::backup_failed`]). `None` (the default): no backup.
+    pub backup: Option<String>,
     /// A duplicate by content is read as a new file is, its XMP sidecar included: the Lightroom
     /// import makes a record of its own from it ([`Duplicate::file`], #2589). Any other import
     /// skips it without looking up its sidecar (a round trip per name on a network share, #2954).
@@ -209,6 +214,13 @@ pub struct ImportReport {
     pub kept: Vec<Kept>,
     /// (path, error)
     pub failed: Vec<(String, String)>,
+    /// [`ImportOptions::backup`]: the backup copies made.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub backups: Vec<BackupCopy>,
+    /// [`ImportOptions::backup`]: imported photos with no backup copy, and why. A Move keeps such a
+    /// photo's original at the source ([`ImportReport::kept`]).
+    #[serde(rename = "backupFailed", skip_serializing_if = "Vec::is_empty")]
+    pub backup_failed: Vec<Kept>,
     /// Files found after expanding folders.
     pub scanned: usize,
     /// Photos whose metadata/develop settings were read from an XMP sidecar (or embedded XMP).
@@ -265,6 +277,15 @@ pub struct Moved {
     /// Its sidecars' new paths.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub sidecars: Vec<String>,
+}
+
+/// A backup copy an import made ([`ImportOptions::backup`]).
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct BackupCopy {
+    /// The imported file: the copy in the destination, which the library uses.
+    pub path: String,
+    /// Its backup.
+    pub to: String,
 }
 
 /// A source a Move left where it was.

@@ -662,6 +662,7 @@ mod prepared_tests {
             info: ProbeInfo { format: "JPG".into(), ..ProbeInfo::default() },
             sidecar: None,
             placed: None,
+            backup: None,
         };
         let mut prepared = Prepared {
             scanned: 2,

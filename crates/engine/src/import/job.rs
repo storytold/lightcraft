@@ -31,6 +31,8 @@ pub struct ImportJob {
     mode: ImportMode,
     lib_dir: Option<PathBuf>,
     copy_root: Option<PathBuf>,
+    /// [`ImportOptions::backup`], when the import copies or moves.
+    backup_root: Option<PathBuf>,
     /// The library as it was when the import was set up, until it is looked up
     /// ([`ImportJob::look_up_library`], with the first files): setting an import up is the
     /// session's thread, and a table of a library of millions of photos takes seconds. With it,
@@ -95,6 +97,8 @@ pub(super) struct ReadyFile {
     pub(super) info: ProbeInfo,
     pub(super) sidecar: Option<crate::sidecar::SidecarData>,
     pub(super) placed: Option<crate::import_move::Placed>,
+    /// [`ImportOptions::backup`]: its backup copy, or why it has none. `None`: no backup asked for.
+    pub(super) backup: Option<Result<String, String>>,
 }
 
 impl Prepared {
@@ -138,7 +142,7 @@ impl Prepared {
                 items.push(item);
                 continue;
             };
-            let ReadyFile { path, stored, info, sidecar, placed } = *ready;
+            let ReadyFile { path, stored, info, sidecar, placed, backup } = *ready;
             let existing_path = paths.get(&normalize_import_path(&stored)).copied().or_else(|| paths.get(&normalize_import_path(&path)).copied());
             let existing_hash = info.content_hash.as_ref().and_then(|hash| hashes.get(hash).copied());
             if let Some(existing) = existing_path.or(existing_hash) {
@@ -153,11 +157,27 @@ impl Prepared {
                     file: Some(Box::new(FileFacts { meta: info.meta, captured: info.captured, orientation: info.orientation, sidecar })),
                 });
             } else {
-                items.push(PreparedItem::Ready(Box::new(ReadyFile { path, stored, info, sidecar, placed })));
+                items.push(PreparedItem::Ready(Box::new(ReadyFile { path, stored, info, sidecar, placed, backup })));
             }
         }
         self.items = items;
     }
+}
+
+/// Why `backup` can't be an import's backup folder ([`ImportOptions::backup`]), if it can't: the
+/// import doesn't copy or move (`transfer`: as asked; `mode`: in effect, Add in a library that keeps
+/// its files in its own storage), or the folder is the destination `root`, inside it, or holds it —
+/// a backup there could land on the main copies themselves and be counted as made.
+pub fn backup_folder_error(mode: ImportMode, transfer: bool, root: Option<&Path>, backup: &Path) -> Option<String> {
+    if !transfer {
+        return Some("a backup copy is made only when the photos are copied or moved (mode copy or move)".into());
+    }
+    if mode == ImportMode::Add {
+        return Some("this library keeps its photos in its own storage, so no backup copy can be made".into());
+    }
+    let root = root?;
+    (crate::import_move::inside(backup, root) || crate::import_move::inside(root, backup))
+        .then(|| format!("the backup folder {} must be outside the destination {} and not contain it", backup.display(), root.display()))
 }
 
 fn normalize_import_path(path: &str) -> String {
@@ -190,6 +210,12 @@ impl ImportJob {
         if matches!(mode, ImportMode::Copy | ImportMode::Move) && copy_root.is_none() {
             return Err(crate::EngineError::Other("copying or moving needs a destination folder or an open library".into()));
         }
+        let backup_root = opts.backup.as_deref().map(str::trim).filter(|b| !b.is_empty()).map(PathBuf::from);
+        if let Some(b) = &backup_root
+            && let Some(e) = backup_folder_error(mode, transfer, copy_root.as_deref(), b)
+        {
+            return Err(crate::cmd::bad("library.import", e));
+        }
         let fresh = opts.on_deleted == OnDeleted::Fresh;
         Ok(ImportJob {
             seq: Some(opts.rename_start.max(1)),
@@ -197,6 +223,7 @@ impl ImportJob {
             mode,
             lib_dir,
             copy_root,
+            backup_root,
             library: Some((s.catalog.clone(), fresh)),
             by_path: HashMap::new(),
             local_sizes: HashMap::new(),
@@ -532,6 +559,7 @@ impl ImportJob {
                     };
                     let folders = opts.organize.folders(&q);
                     let dir = folders.iter().fold(root.to_path_buf(), |d, f| d.join(f));
+                    let backup = self.backup_root.clone().map(|b| (root.to_path_buf(), b));
                     // the name this file gets depends on what a pending transfer of a like-named file
                     // into the same folder ends up with: that one goes first
                     let as_named = name.as_deref().unwrap_or(if own.is_empty() { "photo" } else { own.as_str() });
@@ -557,7 +585,7 @@ impl ImportJob {
                     // (transfers of one folder and name family can take each other's names, so they never run together)
                     plan.pending_families.insert(family);
                     plan.pending_hashes.extend(info.content_hash.clone());
-                    plan.transfers.push(Transfer { path, info, sidecar, dir, how, dng });
+                    plan.transfers.push(Transfer { path, info, sidecar, dir, how, dng, backup });
                     continue;
                 }
                 (ImportMode::Move, _) => {
@@ -571,7 +599,12 @@ impl ImportJob {
                 self.by_hash.insert(h.clone(), None);
             }
             self.done.fetch_add(1, Relaxed);
-            plan.slots.push(Slot::Item(PreparedItem::Ready(Box::new(ReadyFile { path, stored, info, sidecar, placed: None }))));
+            // (a file already inside the destination or the library is added where it is: nothing was copied to back up)
+            let backup = self
+                .backup_root
+                .as_ref()
+                .map(|_| Err("already inside the destination or the library: added where it is, so no backup copy was made".into()));
+            plan.slots.push(Slot::Item(PreparedItem::Ready(Box::new(ReadyFile { path, stored, info, sidecar, placed: None, backup }))));
         }
         self.run_plan(&mut plan, &mut out, cancel);
         out

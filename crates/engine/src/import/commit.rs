@@ -1,7 +1,7 @@
 use super::defaults::apply_import_defaults;
 use super::files::copy_into;
 use super::job::{Prepared, PreparedItem, ReadyFile};
-use super::types::{Duplicate, FileFacts, ImportOptions, ImportReport, Kept, Moved, OnDeleted};
+use super::types::{BackupCopy, Duplicate, FileFacts, ImportOptions, ImportReport, Kept, Moved, OnDeleted};
 use super::{HashMap, Op, Path, PathBuf, Photo, PhotoId, ProbeInfo, Session, Source};
 
 /// A batch's items in file order while its transfers are pending ([`ImportJob::run_plan`]).
@@ -30,6 +30,8 @@ pub(super) struct Transfer {
     pub(super) how: How,
     /// Copy as DNG.
     pub(super) dng: bool,
+    /// [`ImportOptions::backup`]: (the destination root `dir` is inside, the backup folder).
+    pub(super) backup: Option<(PathBuf, PathBuf)>,
 }
 
 pub(super) enum How {
@@ -139,8 +141,9 @@ pub(super) fn run_transfers(
 
 /// Copy or move one planned file (and Copy as DNG); its item.
 fn run_transfer(t: Transfer, file_bytes: Option<&crate::merge::ByteReader>) -> PreparedItem {
-    let Transfer { path, mut info, sidecar, dir, how, dng, .. } = t;
+    let Transfer { path, mut info, sidecar, dir, how, dng, backup } = t;
     let mut placed = None;
+    let mut converted = false;
     let mut stored = match how {
         How::Place { name } => match crate::import_move::place(Path::new(&path), &dir, &name) {
             Ok(pl) => {
@@ -163,12 +166,27 @@ fn run_transfer(t: Transfer, file_bytes: Option<&crate::merge::ByteReader>) -> P
             Ok(dng) => {
                 let _ = std::fs::remove_file(&stored);
                 stored = dng;
+                converted = true;
                 info.format = "DNG".into();
             }
             Err(e) => log::warn!("import {path}: copy as DNG: {e}"),
         }
     }
-    PreparedItem::Ready(Box::new(ReadyFile { path, stored, info, sidecar, placed }))
+    let backup = backup.map(|(root, to)| back_up(&stored, placed.as_ref(), &root, &to, if converted { None } else { info.content_hash.as_deref() }));
+    PreparedItem::Ready(Box::new(ReadyFile { path, stored, info, sidecar, placed, backup }))
+}
+
+/// The backup copy of a file an import put at `stored` inside `root` — with a Move's sidecars beside
+/// it, so the backup holds what the destination does ([`crate::import_move::backup_copy`]); its path,
+/// or why it has none. `probe_hash` is the content hash of `stored` as the import read it (`None`:
+/// compared byte for byte).
+fn back_up(stored: &str, placed: Option<&crate::import_move::Placed>, root: &Path, to: &Path, probe_hash: Option<&str>) -> Result<String, String> {
+    let expect = probe_hash.and_then(lightcraft_preview::Hash128::parse);
+    let copy = crate::import_move::backup_copy(Path::new(stored), root, to, expect)?;
+    for sc in placed.map(|p| p.sidecars.as_slice()).unwrap_or_default() {
+        crate::import_move::backup_copy(&sc.dst, root, to, None)?;
+    }
+    Ok(copy.to_string_lossy().to_string())
 }
 
 /// A trashed photo's file is not where the library had it (never on the web, where paths are
@@ -205,7 +223,8 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
     let mut report = ImportReport { scanned: prepared.scanned, ..Default::default() };
     let mut ops = Vec::new();
     // Move: placed at the destination, sources untouched until the records are committed
-    let mut placed: Vec<crate::import_move::Placed> = Vec::new();
+    // (with why its source stays: its backup copy failed)
+    let mut placed: Vec<(crate::import_move::Placed, Option<String>)> = Vec::new();
     // photos added by this batch, by content (a duplicate of a file earlier in the import names it)
     let mut new_hash: HashMap<String, PhotoId> = HashMap::new();
     // Fresh: trashed photos a new import replaces (by content or by file), each removed once
@@ -276,8 +295,19 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
             PreparedItem::Failed(path, e) => report.failed.push((path, e)),
             PreparedItem::Kept(k) => report.kept.push(k),
             PreparedItem::Ready(r) => {
-                let ReadyFile { path, stored, info, sidecar, placed: pl } = *r;
-                placed.extend(pl);
+                let ReadyFile { path, stored, info, sidecar, placed: pl, backup } = *r;
+                let no_backup = match backup {
+                    Some(Ok(to)) => {
+                        report.backups.push(BackupCopy { path: stored.clone(), to });
+                        None
+                    }
+                    Some(Err(reason)) => {
+                        report.backup_failed.push(Kept { path: path.clone(), reason: reason.clone() });
+                        Some(reason)
+                    }
+                    None => None,
+                };
+                placed.extend(pl.map(|p| (p, no_backup)));
                 let id = s.catalog.alloc_photo_id();
                 if let Some(h) = &info.content_hash {
                     new_hash.insert(h.clone(), id);
@@ -358,7 +388,7 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
         && let Err(e) = s.commit(&format!("{verb} {n} Photo{}", if n == 1 { "" } else { "s" }), Op::Batch { ops })
     {
         // nothing was catalogued: take the moves back (their sources were never touched)
-        placed.iter().for_each(crate::import_move::rollback);
+        placed.iter().for_each(|(p, _)| crate::import_move::rollback(p));
         return Err(e);
     }
     if !placed.is_empty() {
@@ -371,19 +401,25 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
 /// still intact. Nothing is removed when the library can't be saved: saved is on disk, not just
 /// handed to the catalog log's thread, which looks at the folder only when it writes (issue #3240),
 /// so the log is flushed first.
-fn finish_moves(s: &mut Session, placed: Vec<crate::import_move::Placed>, log0: usize, report: &mut ImportReport) {
+fn finish_moves(s: &mut Session, placed: Vec<(crate::import_move::Placed, Option<String>)>, log0: usize, report: &mut ImportReport) {
     // (saving here clears the pending ops, so the sidecars `execute` would auto-write are written here)
     let auto: Vec<Op> = if s.xmp.auto_write { s.pending_log.get(log0..).map(<[Op]>::to_vec).unwrap_or_default() } else { Vec::new() };
     let before = s.pending_log.len();
     if let Err(e) = s.persist().and_then(|()| s.flush_log()) {
-        for p in placed {
+        for (p, _) in placed {
             let reason = format!("the library could not be saved ({e}): the original stays; the photo uses the copy at {}", p.dst.display());
             report.kept.push(Kept { path: p.src.to_string_lossy().to_string(), reason });
         }
         return;
     }
-    for p in placed {
+    for (p, no_backup) in placed {
         let from = p.src.to_string_lossy().to_string();
+        // a card is never wiped while the photo has one copy only
+        if let Some(why) = no_backup {
+            let reason = format!("it has no backup copy ({why}): the original stays; the photo uses the copy at {}", p.dst.display());
+            report.kept.push(Kept { path: from, reason });
+            continue;
+        }
         match crate::import_move::finish(&p) {
             Ok(kept) => {
                 let sidecars = p.sidecars.iter().map(|sc| sc.dst.to_string_lossy().to_string()).collect();

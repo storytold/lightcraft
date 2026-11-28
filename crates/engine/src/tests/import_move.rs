@@ -535,3 +535,130 @@ fn finish_keeps_the_original_when_the_copy_changed_to_the_same_length() {
     inject(Fault::None);
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// A backup copy (the `backup` param) mirrors the destination: the same folders and names the
+/// import gave the main copies — the folder template, the rename template and its numbers, and the
+/// `-1` a taken name got — not a folder of its own, and a Move's sidecars come along.
+#[test]
+fn a_backup_copy_mirrors_the_destination() {
+    let base = temp_dir("backup-mirror");
+    let (card, dest, backup) = (base.join("card"), base.join("Photos"), base.join("Backup"));
+    write_png(&card.join("a.png"), 1);
+    write_png(&card.join("b.png"), 2);
+    // someone else's file holds the first name in the destination: the copy is numbered, and so is its backup
+    let taken = dest.join("2026/20260114/20260114_001.png");
+    std::fs::create_dir_all(taken.parent().unwrap()).unwrap();
+    std::fs::write(&taken, b"someone else's file").unwrap();
+    let mut s = session();
+    let r = s
+        .execute(
+            "library.import",
+            &json!({"paths": [card.to_string_lossy()], "mode": "copy", "destination": dest.to_string_lossy(), "backup": backup.to_string_lossy(),
+                    "organize": "{date:%Y}/{date:%Y%m%d}", "rename": "{date:%Y%m%d}_{seq:3}"}),
+        )
+        .unwrap();
+    assert_eq!(len(&r, "imported"), 2, "{r}");
+    assert_eq!(len(&r, "backups"), 2, "{r}");
+    assert_eq!(len(&r, "backupFailed"), 0, "{r}");
+    let copies: Vec<String> = files_under(&dest).into_iter().filter(|f| *f != "2026/20260114/20260114_001.png").collect();
+    assert_eq!(copies.len(), 2);
+    assert!(copies.iter().any(|f| f.ends_with("_001-1.png")), "the taken name was numbered: {copies:?}");
+    assert_eq!(files_under(&backup), copies, "the same folders and names as the main copies");
+    for f in &copies {
+        assert_eq!(std::fs::read(backup.join(f)).unwrap(), std::fs::read(dest.join(f)).unwrap(), "{f}");
+    }
+    // the library uses the main copies, never the backup
+    assert!(photo_paths(&s).iter().all(|p| Path::new(p).starts_with(&dest)), "{:?}", photo_paths(&s));
+
+    // Move: the sidecar beside the moved photo is backed up beside its backup
+    let (card2, dest2, backup2) = (base.join("card2"), base.join("Photos2"), base.join("Backup2"));
+    write_png(&card2.join("c.png"), 3);
+    std::fs::write(card2.join("c.xmp"), xmp(4)).unwrap();
+    let r = import_move(&mut s, &[&card2], &dest2, json!({"organize": "flat", "backup": backup2.to_string_lossy()}));
+    assert_eq!(len(&r, "moved"), 1, "{r}");
+    assert_eq!(files_under(&backup2), files_under(&dest2));
+    assert_eq!(files_under(&backup2), ["c.png", "c.xmp"]);
+    assert_eq!(files_under(&card2), Vec::<String>::new(), "a backed-up move empties the card");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A backup copy gets the check the main copy gets: one that comes out different is removed and
+/// reported, the photo is still imported, and a Move keeps that photo's original, so the card never
+/// loses a photo that has one copy only. A different file already at the backup's place is left
+/// alone (and not given another name, which would break the mirror); the same file counts.
+#[test]
+fn a_bad_backup_copy_is_caught_and_a_move_keeps_its_original() {
+    for mode in ["copy", "move"] {
+        let base = temp_dir(&format!("backup-bad-{mode}"));
+        let (card, dest, backup) = (base.join("card"), base.join("out"), base.join("bk"));
+        write_png(&card.join("a.png"), 5);
+        let bytes = std::fs::read(card.join("a.png")).unwrap();
+        let mut s = session();
+        inject(Fault::CorruptBackup);
+        let r = s.execute(
+            "library.import",
+            &json!({"paths": [card.to_string_lossy()], "mode": mode, "destination": dest.to_string_lossy(), "backup": backup.to_string_lossy(), "organize": "flat"}),
+        );
+        inject(Fault::None);
+        let r = r.unwrap();
+        assert_eq!(len(&r, "imported"), 1, "{mode}: {r}");
+        assert_eq!(len(&r, "backups"), 0, "{mode}: {r}");
+        assert_eq!(len(&r, "backupFailed"), 1, "{mode}: {r}");
+        assert!(r["backupFailed"][0]["reason"].as_str().unwrap().contains("differs"), "{r}");
+        assert_eq!(files_under(&backup), Vec::<String>::new(), "{mode}: no bad backup left");
+        assert_eq!(std::fs::read(dest.join("a.png")).unwrap(), bytes, "{mode}: the main copy is good");
+        assert_eq!(std::fs::read(card.join("a.png")).unwrap(), bytes, "{mode}: the original stays");
+        if mode == "move" {
+            assert_eq!(len(&r, "moved"), 0, "{r}");
+            assert!(r["kept"][0]["reason"].as_str().unwrap().contains("no backup copy"), "{r}");
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    let base = temp_dir("backup-taken");
+    let (card, dest, backup) = (base.join("card"), base.join("out"), base.join("bk"));
+    write_png(&card.join("a.png"), 6);
+    write_png(&card.join("b.png"), 7);
+    std::fs::create_dir_all(&backup).unwrap();
+    std::fs::write(backup.join("a.png"), b"another file").unwrap();
+    std::fs::copy(card.join("b.png"), backup.join("b.png")).unwrap();
+    let mut s = session();
+    let r = s
+        .execute(
+            "library.import",
+            &json!({"paths": [card.to_string_lossy()], "mode": "copy", "destination": dest.to_string_lossy(), "backup": backup.to_string_lossy(), "organize": "flat"}),
+        )
+        .unwrap();
+    assert_eq!(len(&r, "imported"), 2, "{r}");
+    assert_eq!(len(&r, "backups"), 1, "the identical file counts: {r}");
+    assert_eq!(len(&r, "backupFailed"), 1, "{r}");
+    assert!(r["backupFailed"][0]["reason"].as_str().unwrap().contains("different file"), "{r}");
+    assert_eq!(std::fs::read(backup.join("a.png")).unwrap(), b"another file", "left as it was");
+    assert_eq!(files_under(&backup), ["a.png", "b.png"], "no renamed backup");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A backup folder is refused where it could not be honest: adding in place copies nothing, and a
+/// folder that is the destination, or inside it, or holds it, could put the backup on the main
+/// copies themselves and count it as made.
+#[test]
+fn a_backup_folder_that_cannot_be_a_backup_is_refused() {
+    let base = temp_dir("backup-refused");
+    let (card, dest) = (base.join("card"), base.join("out"));
+    write_png(&card.join("a.png"), 8);
+    let mut s = session();
+    let run = |s: &mut Session, mode: &str, backup: &Path| {
+        s.execute(
+            "library.import",
+            &json!({"paths": [card.to_string_lossy()], "mode": mode, "destination": dest.to_string_lossy(), "backup": backup.to_string_lossy()}),
+        )
+    };
+    assert!(run(&mut s, "add", &base.join("bk")).is_err());
+    for b in [dest.clone(), dest.join("bk"), base.clone()] {
+        let e = run(&mut s, "copy", &b).unwrap_err().to_string();
+        assert!(e.contains("outside the destination"), "{}: {e}", b.display());
+    }
+    assert_eq!(s.catalog.len(), 0);
+    assert_eq!(files_under(&card), ["a.png"]);
+    let _ = std::fs::remove_dir_all(&base);
+}

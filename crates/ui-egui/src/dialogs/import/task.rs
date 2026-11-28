@@ -29,6 +29,9 @@ pub struct ImportTask {
     /// Move: originals moved, and sources left in place (reported by the engine with a reason).
     pub moved: usize,
     pub kept: usize,
+    /// With a backup folder: photos backed up, and photos imported without a backup copy.
+    pub backed_up: usize,
+    pub no_backup: usize,
     /// Structured diagnostics from foreign XMP develop settings.
     pub warnings: Vec<ImportWarning>,
     undo0: usize,
@@ -255,6 +258,9 @@ pub fn start(app: &mut LightcraftApp, d: &ImportDialog) -> Result<Value, String>
         if d.dng && !d.move_files {
             params["dng"] = json!(true);
         }
+        if !d.backup.trim().is_empty() {
+            params["backup"] = json!(d.backup.trim());
+        }
     }
     // the params are checked before a new album is created, so a refused import leaves no album
     let mut check = params.clone();
@@ -383,6 +389,11 @@ fn commit_batch(app: &mut LightcraftApp, task: &mut ImportTask, prepared: lightc
             task.failed += len("failed");
             task.moved += len("moved");
             task.kept += len("kept");
+            task.backed_up += len("backups");
+            task.no_backup += len("backupFailed");
+            for k in v["backupFailed"].as_array().into_iter().flatten() {
+                log::warn!("import: no backup copy of {}: {}", k["path"].as_str().unwrap_or(""), k["reason"].as_str().unwrap_or(""));
+            }
             task.warnings.extend(v["warnings"].as_array().into_iter().flatten().filter_map(|warning| serde_json::from_value(warning.clone()).ok()));
             for k in v["kept"].as_array().into_iter().flatten() {
                 log::warn!("import: kept {}: {}", k["path"].as_str().unwrap_or(""), k["reason"].as_str().unwrap_or(""));
@@ -529,6 +540,12 @@ fn import_summary(app: &LightcraftApp, task: &ImportTask) -> String {
         msg.push_str(&crate::i18n::tr_format!(" · {} moved", task.moved));
         if task.kept > 0 {
             msg.push_str(&crate::i18n::tr_format!(" · {} original{} left at the source", task.kept, crate::i18n::plural_s(task.kept)));
+        }
+    }
+    if task.params["backup"].is_string() {
+        msg.push_str(&crate::i18n::tr_format!(" · {} backed up", task.backed_up));
+        if task.no_backup > 0 {
+            msg.push_str(&crate::i18n::tr_format!(" · {} without a backup copy", task.no_backup));
         }
     }
     if task.duplicates > 0 {

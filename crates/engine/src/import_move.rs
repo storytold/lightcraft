@@ -56,6 +56,9 @@ pub(crate) enum Fault {
     Corrupt,
     /// Removing the source fails (as on a read-only card).
     FailRemove,
+    /// A backup copy ([`backup_copy`]) comes out different from the file it copies; the main copy
+    /// is unaffected.
+    CorruptBackup,
     /// Each copy takes a little longer and notes the thread it ran on ([`copy_threads`]), to see
     /// an import's copies run side by side.
     Slow,
@@ -215,6 +218,41 @@ pub(crate) fn copy_new(src: &Path, dir: &Path, name: &str, expect: Option<lightc
         }
     }
     Err(format!("copy {}: no free name in {}", src.display(), dir.display()))
+}
+
+/// Import → backup copy ([`crate::import::ImportOptions::backup`]): copy `file`, which an import
+/// put at a place inside `root`, to the same place inside `backup` — the same folders and the same
+/// name, so the backup mirrors the destination. It gets the checks of [`copy_new`] (a new file,
+/// synced to disk, verified against `expect` or byte for byte against `file`; a bad copy is
+/// removed), but never another name: a file already there with the same bytes counts as the
+/// backup, and one with other bytes is left alone and reported. Returns the backup's path.
+pub(crate) fn backup_copy(file: &Path, root: &Path, backup: &Path, expect: Option<lightcraft_preview::Hash128>) -> Result<PathBuf, String> {
+    let rel = file.strip_prefix(root).map_err(|_| format!("{} is not inside {}: no backup copy was made", file.display(), root.display()))?;
+    let dst = backup.join(rel);
+    if let Some(dir) = dst.parent() {
+        fs::create_dir_all(dir).map_err(|e| format!("backup copy: {}: {e}", dir.display()))?;
+    }
+    // (tests: the backup's copy comes out bad, not the main one)
+    #[cfg(test)]
+    let corrupt = injected(Fault::CorruptBackup);
+    #[cfg(test)]
+    if corrupt {
+        inject(Fault::Corrupt);
+    }
+    let r = copy_verified(file, &dst, expect);
+    #[cfg(test)]
+    if corrupt {
+        inject(Fault::CorruptBackup);
+    }
+    match r {
+        Ok(()) => Ok(dst),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => match same_bytes(file, &dst) {
+            Ok(true) => Ok(dst),
+            Ok(false) => Err(format!("a different file is already at {}: it was left as it is, and no backup copy was made", dst.display())),
+            Err(e) => Err(format!("backup copy: {}: {e}", dst.display())),
+        },
+        Err(e) => Err(format!("backup copy to {}: {e} (no bad copy was left)", dst.display())),
+    }
 }
 
 /// Undo a [`place`]: remove what it created at the destination (the sources were never touched).

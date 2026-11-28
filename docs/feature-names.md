@@ -13,3 +13,7 @@ All 17 shipped non-English catalogs contain the new labels. The normal CI, persp
 ## Regression coverage
 
 The standard-library-only `display_names` integration tests scan production Rust string literals for the retired display names and preserve explicit compatibility exceptions. They also test identifier, comment and raw-string handling. These focused checks do not replace application or visual testing.
+
+## Import backup copy
+
+The import dialog's option to copy each imported file to a second folder is labelled **Backup to**, and its parameter is `backup`. Both are ordinary descriptive words for what the option does: it keeps a backup copy. The label does not use another photo library's name for its version of this option. Checked 2026-11-27 against the naming standard's names list; no trademark search was run, since the label is plain descriptive wording.

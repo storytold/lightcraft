@@ -4211,6 +4211,57 @@ fn import_copy_renames_into_destination() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// Import dialog, Copy with **Backup to**: Choose… sets the backup folder, the import copies each
+/// file there under the same name as in the destination, and the summary says how many were backed up.
+#[test]
+fn import_copy_with_a_backup_folder() {
+    let base = std::env::temp_dir().join(format!("lc-ui-import-backup-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let (src, dest, backup) = (base.join("card"), base.join("out"), base.join("backup"));
+    std::fs::create_dir_all(&src).unwrap();
+    for i in 0..3u8 {
+        let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[i * 50, 7, 9, 255]; 64] };
+        let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+        std::fs::write(src.join(format!("IMG_{i:02}.png")), png).unwrap();
+    }
+    let backup_s = backup.to_string_lossy().to_string();
+    let services = crate::Services { png: None, pick_folder: Some(Box::new(move || Some(backup_s.clone()))), ..Default::default() };
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo().with_fs(), services);
+    app.ui.view = crate::state::ViewMode::PhotoGrid;
+    let mut h = Headless::new(app, [1300.0, 900.0], 1.0);
+    let t = Duration::from_secs(10);
+    let r = h.request("engine.execute", json!({"command": "file.addPhotos", "params": {"paths": [src.to_string_lossy()]}}), t);
+    assert_eq!(r["result"]["scanning"], true, "{r}");
+    h.settle(SETTLE);
+    h.step_until(SETTLE, |h| matches!(h.app.ui.dialog, Some(crate::state::Dialog::Import { .. })));
+    for id in ["button:importCopy", "button:importBackup"] {
+        let r = h.request("ui.clickWidget", json!({"id": id}), t);
+        assert_eq!(r["ok"], true, "{id}: {r}");
+    }
+    if let Some(crate::state::Dialog::Import { opts }) = &mut h.app.ui.dialog {
+        assert_eq!(opts.backup, backup.to_string_lossy(), "Choose… sets the backup folder");
+        opts.destination = dest.to_string_lossy().to_string();
+        opts.organize = "flat".into();
+        opts.rename = "Trip-{seq:2}".into();
+    } else {
+        panic!("no import dialog");
+    }
+    let r = h.request("ui.dialog.confirm", json!({}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(h.app.import.is_none(), "finished");
+    let names = |d: &std::path::Path| {
+        let mut v: Vec<String> = std::fs::read_dir(d).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+        v.sort();
+        v
+    };
+    assert_eq!(names(&dest).len(), 3);
+    assert_eq!(names(&backup), names(&dest), "the backup has the destination's names");
+    let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    assert!(toast.contains("3 backed up"), "{toast}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// The instant this machine reads as the tests' clock time: an undated file takes the file's
 /// date in the host's zone, so a fixed epoch would file it on the day before west of UTC.
 fn filed_at() -> u64 {

@@ -147,6 +147,7 @@ pub fn helper_tools(has_ui: bool) -> Vec<Value> {
                 "album": {"type": "integer", "description": "Also add to this album id"},
                 "mode": {"type": "string", "enum": ["add", "copy", "move"], "description": "add (default) = reference the files in place; copy = copy them into `destination` (default: the library's Originals/); move = as copy, then each original and its XMP sidecars are removed from the source once the copy is verified and catalogued (duplicates and failures keep their sources; `kept` lists sources left in place and why; undo leaves the moved files at the destination)"},
                 "destination": {"type": "string", "description": "Copy or move: destination folder"},
+                "backup": {"type": "string", "description": "Copy or move: also copy each file into this folder, under the same folders and name as in the destination, verified like the main copy (off when absent). `backups` lists the copies made; `backupFailed` lists photos imported without one and why (a move keeps their originals). Must be outside the destination"},
                 "organize": {"type": "string", "description": "Copy or move: folders inside the destination — date (YYYY/YYYY-MM-DD, default), month (YYYY/YYYY-MM), flat, or a folder template such as {date:%Y}/{date:%Y%m%d} (→ 2026/20260114; the template's / make the levels, tokens as for rename; relative, no ..). Dated by capture time, else the import time"},
                 "onDeleted": {"type": "string", "enum": ["restore", "skip", "fresh"], "description": "A file that is in Recently Deleted: restore (default) = bring the photo back with its edits (`restored` lists it; relinked to the file when its own is gone); skip = leave it there (the duplicate is reported with existingDeleted); fresh = delete the trashed record and import the file as a new photo"},
                 "rename": {"type": "string", "description": "Copy or move: file-name template, e.g. {date:%Y%m%d_%H%M%S}_{seq:3} (run_command photo.renameTokens lists the tags); the extension is kept"}
@@ -685,7 +686,7 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
                 return ToolResult::error(format!("no photos found in {paths:?}"));
             }
             let mut p = json!({"paths": files});
-            for k in ["album", "mode", "destination", "organize", "rename", "onDeleted"] {
+            for k in ["album", "mode", "destination", "backup", "organize", "rename", "onDeleted"] {
                 if let Some(v) = args.get(k).filter(|v| !v.is_null()) {
                     p[k] = v.clone();
                 }
