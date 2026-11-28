@@ -221,7 +221,7 @@ fn validate_for(
     }
     if env("LIGHTCRAFT_LIBRARY").is_some_and(|v| !v.is_empty()) {
         // An inherited library variable could point Nightly's catalog at Stable's library.
-        return Err("nightly-v1 cannot inherit LIGHTCRAFT_LIBRARY; open a library with File ▸ Open Library".into());
+        return Err("nightly-v1 cannot inherit LIGHTCRAFT_LIBRARY; open a library with File → Open Library".into());
     }
     if platform != Platform::Windows
         && let Some(id) = env("FLATPAK_ID").filter(|v| !v.is_empty())

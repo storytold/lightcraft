@@ -376,9 +376,9 @@ pub(crate) fn spoken_rating(rating: u8) -> String {
 /// go from there, and the error itself. (The loupe's pill uses the same two headlines.)
 pub(crate) fn failure_text(offline: bool, error: &str) -> String {
     let (head, hint) = if offline {
-        (crate::i18n::tr("Original offline · no smart preview"), crate::i18n::tr("Right-click ▸ Locate Missing File… to find it again."))
+        (crate::i18n::tr("Original offline · no smart preview"), crate::i18n::tr("Right-click → Locate Missing File… to find it again."))
     } else {
-        (crate::i18n::tr("This photo can't be opened"), crate::i18n::tr("Right-click ▸ Reload from Disk to try again."))
+        (crate::i18n::tr("This photo can't be opened"), crate::i18n::tr("Right-click → Reload from Disk to try again."))
     };
     format!("{head}\n{hint}\n{error}")
 }

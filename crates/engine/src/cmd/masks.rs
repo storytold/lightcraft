@@ -613,7 +613,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "AI Mask Settings",
             [],
             None,
-            "{runOn?: auto | cpu} → {runOn} — where SAM 3 runs (Settings ▸ Performance ▸ AI masks): `auto` (the default) the GPU when there is one (Metal on macOS; elsewhere the parts LightCraft's wgpu kernels run, while GPU rendering is allowed, and the rest on the CPU: `segment.model.status` → `backend` says which), `cpu` all of it on the CPU on every platform (for a GPU that can't run it). Local inference only: a remote worker (`LIGHTCRAFT_SAM3_REMOTE`) runs on its Mac's Metal device either way. Kept with the app's settings; a loaded model moves at its next request",
+            "{runOn?: auto | cpu} → {runOn} — where SAM 3 runs (Settings → Performance → AI masks): `auto` (the default) the GPU when there is one (Metal on macOS; elsewhere the parts LightCraft's wgpu kernels run, while GPU rendering is allowed, and the rest on the CPU: `segment.model.status` → `backend` says which), `cpu` all of it on the CPU on every platform (for a GPU that can't run it). Local inference only: a remote worker (`LIGHTCRAFT_SAM3_REMOTE`) runs on its Mac's Metal device either way. Kept with the app's settings; a loaded model moves at its next request",
             super::always,
             |s, p| {
                 let c = "segment.settings";
