@@ -1,7 +1,7 @@
 use super::colour::{PROXY, file_local_look};
 use super::mono::{fit_tone_only_with, monochrome};
 use super::pairs::{Attempt, TONE_FITS, fit_attempt, fit_partial, search_ordered};
-use super::proxy::{CLIP_TOLERANCE, Cr3Framing, LensGeometry, MIN_PREVIEW_FRACTION, extend_tone, framed_proxies, proxies, structure_agrees};
+use super::proxy::{CLIP_TOLERANCE, Cr3Framing, LensGeometry, MIN_PREVIEW_FRACTION, extend_tone, proxies, structure_agrees};
 use super::tone::{HighlightCheck, highlights};
 use super::{CameraLook, CameraTone, CameraTransform, HsvTable, Mat3, RawImage, Rgb32f, ToneMap, luminance_2020};
 
@@ -315,31 +315,12 @@ pub(super) fn look_proxies(
     lens: Option<&LensGeometry>,
     embedded: Option<&lightcraft_develop::EmbeddedLens>,
 ) -> Option<(Rgb32f, Rgb32f, Vec<bool>)> {
-    // The file's own vignetting data is what its camera applied to the JPEG. A lens database profile describes the
-    // lens, not what this camera did: an ILCE-7M3 JPEG with an FE 28mm F2 at f/2 (maker note: vignetting correction
-    // Auto) shows none of lensfun's correction relative to its raw (the A7CR's shading Auto JPEGs show no consistent
-    // peripheral brightening either, docs/sony-lens-corrections.md). With the whole profile on the sensor that fit
-    // learned corners the JPEG doesn't have: 0.062 held-out RMS instead of 0.027, a darker, orange render. So the share
-    // of the profile the JPEG shows is measured. (Only without a lens warp: the gain goes on the returned proxy, and a
-    // warped one no longer has each pixel at its source position. A warp comes from the file's own opcodes, and a file
-    // with its own correction never gets a database profile, `lens_profiles::for_raw`.)
-    let database = embedded.filter(|e| e.source == lightcraft_develop::LensSource::Database && lens.is_none());
-    let Some(vignette) = database.and_then(|e| e.vignette) else {
-        return proxies(raw, bytes, transform, PROXY, 0.0, lens, embedded);
-    };
-    // A CR3's framing (`estimate_cr3_framing`) is estimated here on the uncorrected sensor, not the corrected one as
-    // before: it compares edge directions, which a smooth vignetting gain hardly moves. On the 22 corpus CR3s with a
-    // database profile it came out the same both ways (21 unmoved, the R50 V at scale 0.986).
-    let (mut sensor, reference, clipped, framing) = framed_proxies(raw, bytes, transform, PROXY, 0.0, lens, None)?;
-    // CR3 proxies come back oriented like the JPEG (their framing aligned to it), the others in sensor orientation
-    let orientation = if raw.format == lightcraft_raw::RawFormat::Cr3 { lightcraft_geom::Orientation::Normal } else { raw.orientation };
-    database_vignetting(&mut sensor, &reference, &clipped, &vignette, ProxyFrame { orientation, framing });
-    Some((sensor, reference, clipped))
+    proxies(raw, bytes, transform, PROXY, 0.0, lens, embedded)
 }
 
 /// Multiply `sensor` by the share of a lens database's `vignette` correction that the camera JPEG `reference` shows
 /// ([`camera_vignetting_amount`]).
-fn database_vignetting(
+pub(super) fn database_vignetting(
     sensor: &mut Rgb32f,
     reference: &Rgb32f,
     clipped: &[bool],
@@ -354,7 +335,7 @@ fn database_vignetting(
 }
 
 /// Where a sensor proxy's pixels sit in the oriented, cropped frame a lens's vignetting is in: `framing` (a CR3 proxy
-/// moved to its camera JPEG's framing, [`framed_proxies`]) takes each pixel to the position it shows, and
+/// moved to its camera JPEG's framing, [`super::proxy::framed_proxies`]) takes each pixel to the position it shows, and
 /// `orientation` maps that position to the oriented frame.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct ProxyFrame {
@@ -425,10 +406,14 @@ pub(super) fn camera_vignetting_amount(
     vignette: &lightcraft_develop::EmbeddedVignette,
     frame: ProxyFrame,
 ) -> f64 {
+    vignetting_amount_from_gains(sensor, reference, clipped, vignetting_gains(sensor, vignette, frame))
+}
+
+/// Estimate the share shown by the JPEG, with each gain evaluated at the sensor position that supplied its pixel.
+pub(super) fn vignetting_amount_from_gains(sensor: &Rgb32f, reference: &Rgb32f, clipped: &[bool], gains: impl IntoIterator<Item = f64>) -> f64 {
     if sensor.data.len() != reference.data.len() {
         return 1.0;
     }
-    let gains = vignetting_gains(sensor, vignette, frame);
     let usable = |p: &[f32; 3]| p.iter().all(|v| v.is_finite()) && luminance_2020(*p) > 0.0;
     let mut classes: Vec<Vec<(f64, [f64; 3], [f64; 3])>> = vec![Vec::new(); HUE_SECTORS + 1];
     for (i, ((s, r), g)) in sensor.data.iter().zip(&reference.data).zip(gains).enumerate() {
@@ -486,7 +471,7 @@ pub(super) fn vignetting_gains(sensor: &Rgb32f, vignette: &lightcraft_develop::E
 }
 
 /// Multiply `sensor` by `amount` of `vignette`'s correction, as the Vignetting amount slider scales it.
-fn apply_vignetting(sensor: &mut Rgb32f, vignette: &lightcraft_develop::EmbeddedVignette, frame: ProxyFrame, amount: f64) {
+pub(super) fn apply_vignetting(sensor: &mut Rgb32f, vignette: &lightcraft_develop::EmbeddedVignette, frame: ProxyFrame, amount: f64) {
     let gains = vignetting_gains(sensor, vignette, frame);
     for (p, g) in sensor.data.iter_mut().zip(gains) {
         let gain = (1.0 + (g - 1.0) * amount) as f32;

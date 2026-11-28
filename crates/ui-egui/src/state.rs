@@ -107,9 +107,23 @@ pub struct UiState {
     #[serde(skip)]
     pub proof_intent: lightcraft_engine::proof::ProofIntent,
     pub proof_paper_ink: bool,
-    /// Masking: show the selected mask as a rendered overlay (O), how (`MaskView` name, ⇧O cycles),
-    /// in which colour and opacity (0..100, colour views), and whether pins are drawn.
+    /// Masking: the selected mask's overlay switched on to stay (O, the panel's eye: "Always"),
+    /// how it is drawn (`MaskView` name, ⇧O cycles), in which colour and opacity (0..100, colour
+    /// views), and whether pins are drawn. Without it the overlay shows only by the one rule of
+    /// [`crate::panels::detail::overlay_mask`]: a mask without settings yet, or the mask whose pin
+    /// or component row the pointer is on. Not kept between sessions: the photo opens without it.
+    #[serde(skip)]
     pub mask_overlay: bool,
+    /// The mask whose pin or component row the pointer is on, this frame and the last (the overlay
+    /// shows it), with the photo it is on: a mask of the same id on another photo is another mask.
+    /// Not the mask's own row: there its effect is judged.
+    #[serde(skip)]
+    pub mask_hover: Option<(lightcraft_engine::catalog::PhotoId, u32)>,
+    #[serde(skip)]
+    pub mask_hover_prev: Option<(lightcraft_engine::catalog::PhotoId, u32)>,
+    /// The masks (of their photos) whose automatic overlay O hid, each until O shows it again.
+    #[serde(skip)]
+    pub mask_overlay_hidden: Vec<(lightcraft_engine::catalog::PhotoId, u32)>,
     pub mask_overlay_mode: String,
     pub mask_overlay_color: [u8; 3],
     pub mask_overlay_opacity: f32,
@@ -258,8 +272,15 @@ pub struct UiState {
     pub dragging_section: Option<crate::sidebar::SidebarSection>,
     /// Selected curve channel in the Curve flyout.
     pub curve_channel: String,
-    /// Selected mixer mode: "hue" | "saturation" | "luminance" | "all".
+    /// The colour band shown in the Color Mixer's Color mode (one of `MIXER_BANDS`).
     pub mixer_mode: String,
+    /// The Color Mixer's tab: "mixer" | "point" (Point Color). Remembered.
+    pub mixer_tab: String,
+    /// What the Mixer adjusts by: "hsl" (eight sliders per Hue / Saturation / Luminance) |
+    /// "color" (one colour at a time). Remembered; HSL by default.
+    pub mixer_adjust: String,
+    /// The HSL group shown: "hue" | "sat" | "lum" | "all". Remembered.
+    pub mixer_group: String,
     /// Selected colour grading tab: "3way" | "shadows" | "midtones" | "highlights".
     pub grading_mode: String,
     /// Colour grading wheels (shadows, midtones, highlights) hidden for viewing by their eye, and
@@ -554,7 +575,10 @@ impl Default for UiState {
             proof_profile: None,
             proof_intent: lightcraft_engine::proof::ProofIntent::Perceptual,
             proof_paper_ink: false,
-            mask_overlay: true,
+            mask_overlay: false,
+            mask_hover: None,
+            mask_hover_prev: None,
+            mask_overlay_hidden: Vec::new(),
             mask_overlay_mode: "color".into(),
             mask_overlay_color: [230, 30, 40],
             mask_overlay_opacity: 50.0,
@@ -607,7 +631,10 @@ impl Default for UiState {
             dragging_album: None,
             dragging_section: None,
             curve_channel: "parametric".into(),
-            mixer_mode: "hue".into(),
+            mixer_mode: "red".into(),
+            mixer_tab: "mixer".into(),
+            mixer_adjust: "hsl".into(),
+            mixer_group: "hue".into(),
             grading_mode: "3way".into(),
             grading_hidden: None,
             tool: String::new(),

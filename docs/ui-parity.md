@@ -178,6 +178,7 @@ establish OS keyboard delivery or cross-platform acceptance.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-25 | patch | Export dialog: Format, Amount and Metadata are a dropdown beside their label, and Color space and Sharpen a boxed dropdown as Resize to is, instead of rows of buttons; the dialog keeps its width |
 | 2026-11-08 | patch | Crop panel Overlay and Perspective Correction, and the Remove panel's mode, are a label with a dropdown beside it (as White Balance is) instead of rows of buttons |
 | 2026-10-28 | minor | Shortcuts: in the Masking panel H toggles the mask pins (the same switch as View → Show Mask Pins) instead of opening Remove; only an unmodified H toggles and it yields only to an explicit assignment of H itself, a Remove key reassigned in Help → Keyboard Shortcuts still opens Remove there, and outside Masking — and the full-screen preview, where no panel shows — H keeps its own binding (Remove, by default) |
 | 2026-10-24 | minor | KEYC-METADATA: ⌘⌥K / Ctrl+Alt+K (Photo ▸ Enable Painting) paints the painter box's keyword, stops painting when pressed again, and with the box empty opens the Keywords panel |

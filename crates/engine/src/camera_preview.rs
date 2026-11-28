@@ -28,7 +28,7 @@ mod tone;
 pub(crate) use colour::{PROFILE_PROXY, dng_colour, dng_tone_eligible};
 #[cfg(test)]
 use colour::{PROXY, starting_colour_with};
-pub(crate) use colour::{file_local_look, starting_colour, starting_colour_tags, with_starting_colour};
+pub(crate) use colour::{correspondence_correction, file_local_look, starting_colour, starting_colour_tags, with_starting_colour};
 pub(crate) use hue_sat::HueSat;
 #[cfg(test)]
 use hue_sat::{MIN_LUMINANCE_KEPT, NO_LUMINANCE_KEPT, fit_hue_sat, hue_saturation, restore_weight};
@@ -91,11 +91,12 @@ use tone::{HighlightCheck, ToneFit, fit_tone, fit_tone_conditional, highlights};
 /// 16: a camera profile's pooled tone curve continues a photo's own past what its JPEG showed.
 /// 17: only a look with the profile's colour continues along its pooled tone curve.
 /// 18: continuing a photo's curve keeps it as it was where its JPEG taught it (`thinned_knots`).
-/// 27: the bundled NIKON D780, D750 and D90 profiles.
 /// 26: a lens database's vignetting correction reaches the sensor proxy only in the share the camera JPEG shows
 /// (`camera_vignetting_amount`, ranked within chromaticity classes), not whole: JPEGs that show less of it fitted looks too
 /// dark, with skewed colour. The same for a DNG's tone fit; a CR3 proxy gets the gain where its framed pixels come from.
-pub const LOOK_VERSION: u32 = 27;
+/// 27: geometry-gated external lens and camera framing for JPEG calibration correspondences.
+/// 28: the bundled NIKON D780, D750 and D90 profiles.
+pub const LOOK_VERSION: u32 = 28;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {
