@@ -9,6 +9,10 @@
 
 ## Unreleased
 
+### Brush Density
+- The brush has a Density slider beside Size, Feather and Flow, as in Lightroom: the most a stroke covers, however
+  many times you paint over it (issue #4005). Effect presets carry it with the other brush settings.
+
 ### Scripted imports say what they skipped
 - `library.import` now reports what its folder walk left out, `skipped: {unreadable, unsupported}`, as
   `library.importPreview` already did, so a script or MCP client can tell a skipped file from a missing one (#4319).

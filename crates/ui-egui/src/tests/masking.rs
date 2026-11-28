@@ -109,6 +109,94 @@ fn subtract_brush_removes_sky_coverage_and_add_restores_it() {
     h.settle(SETTLE);
 }
 
+/// The densities of the brush strokes of mask `mask`, in painting order.
+fn stroke_densities(h: &Headless, mask: usize) -> Vec<f64> {
+    develop(h).masks[mask]
+        .components
+        .iter()
+        .flat_map(|c| match &c.shape {
+            MaskShape::Brush { strokes } => strokes.iter().map(|s| s.density).collect(),
+            _ => vec![],
+        })
+        .collect()
+}
+
+/// The Density slider caps what a stroke covers, as in Lightroom: a full-flow stroke at Density
+/// 40 paints 40 %, however many of its dabs overlap, and keeps the density it was painted with
+/// when the slider changes later.
+#[test]
+fn brush_density_caps_the_stroke() {
+    let mut h = detail("panel.masking");
+    click(&mut h, "maskNew:brush");
+    let r = h.request("ui.set", json!({"brushSize": 0.15, "brushFeather": 0.0, "brushFlow": 100.0, "brushDensity": 40.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    // a short drag: dozens of overlapping dabs over the centre
+    pointer(
+        &mut h,
+        json!([{"kind": "down", "x": 0.4, "y": 0.5}, {"kind": "drag", "x": 0.5, "y": 0.5}, {"kind": "drag", "x": 0.6, "y": 0.5}, {"kind": "up", "x": 0.6, "y": 0.5}]),
+    );
+    assert_eq!(stroke_densities(&h, 0), [40.0]);
+    let cover = mask_coverage(&h, 0, 50, 50);
+    assert!((cover - 0.4).abs() < 0.01, "{cover}");
+    // a later stroke at another density leaves the first one as it was
+    let r = h.request("ui.set", json!({"brushDensity": 80.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    brush_at(&mut h, 0.15, 0.15);
+    assert_eq!(stroke_densities(&h, 0), [40.0, 80.0]);
+    let cover = mask_coverage(&h, 0, 50, 50);
+    assert!((cover - 0.4).abs() < 0.01, "{cover}");
+    h.settle(SETTLE);
+}
+
+/// Double-clicking Density resets it to full, its default, not to the slider's minimum; a
+/// density of 0 set over the control channel paints at the slider's minimum instead of nothing.
+#[test]
+fn brush_density_resets_to_full_and_never_paints_at_zero() {
+    let mut h = detail("panel.masking");
+    let r = h.request("ui.resize", json!({"width": 1200, "height": 1400}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    click(&mut h, "maskNew:brush");
+    h.app.ui.brush_density = 30.0;
+    h.settle(SETTLE);
+    let r = h.request("ui.clickWidget", json!({"id": "sliderLabel:ui.brushDensity", "count": 2, "fx": 0.1}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(h.app.ui.brush_density, 100.0);
+    // the other brush sliders still reset to their minimum
+    (h.app.ui.brush_size, h.app.ui.brush_feather, h.app.ui.brush_flow) = (0.1, 40.0, 60.0);
+    for id in ["ui.brushSize", "ui.brushFeather", "ui.brushFlow"] {
+        // (half a second apart, so egui counts a new double-click rather than a third click)
+        for _ in 0..40 {
+            h.step();
+        }
+        let r = h.request("ui.clickWidget", json!({"id": format!("sliderLabel:{id}"), "count": 2, "fx": 0.1}), T);
+        assert_eq!(r["ok"], true, "{id}: {r}");
+    }
+    assert_eq!((h.app.ui.brush_size, h.app.ui.brush_feather, h.app.ui.brush_flow), (1.0 / 400.0, 0.0, 1.0));
+    let r = h.request("ui.set", json!({"brushDensity": 0.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    brush_at(&mut h, 0.5, 0.5);
+    let d = develop(&h);
+    let density = d.masks[0].components.iter().find_map(|c| match &c.shape {
+        MaskShape::Brush { strokes } => strokes.first().map(|s| s.density),
+        _ => None,
+    });
+    assert_eq!(density, Some(1.0));
+}
+
+/// A settings file from before Density paints at full density; one out of range is clamped.
+#[test]
+fn restored_brush_density_is_kept_in_range() {
+    let old = serde_json::from_str::<crate::UiState>(r#"{"brushFlow": 30}"#).expect("settings").sanitized();
+    assert_eq!((old.brush_flow, old.brush_density), (30.0, 100.0));
+    for (saved, want) in [(0.0, 1.0), (55.0, 55.0), (1e9, 100.0)] {
+        let s = serde_json::from_value::<crate::UiState>(json!({"brushDensity": saved})).expect("settings").sanitized();
+        assert_eq!(s.brush_density, want);
+    }
+    for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        assert_eq!(crate::UiState { brush_density: bad, ..Default::default() }.sanitized().brush_density, 100.0, "{bad}");
+    }
+}
+
 #[test]
 fn new_brush_starts_a_separate_mask_in_paint_mode() {
     let mut h = detail("panel.masking");
@@ -2174,6 +2262,31 @@ fn a_fast_brush_stroke_shows_without_gaps_before_the_button_is_released() {
     }
 }
 
+/// Density caps the stroke being painted as it caps the committed one (#4005): at Density 40 the
+/// live overlay is 40 % of the full-coverage tint, and the committed stroke matches it.
+#[test]
+fn a_reduced_density_stroke_shows_at_its_density_while_held() {
+    let mut h = detail("panel.masking");
+    h.settle(SETTLE);
+    exec(&mut h, "tool.brush", json!({"new": true}));
+    let r = h.request("ui.set", json!({"brushSize": 0.03, "brushFeather": 50.0, "brushFlow": 100.0, "brushDensity": 40.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let y = 0.4;
+    let (photo, held) = hold_fast_stroke(&mut h, y);
+    let col = h.app.ui.mask_overlay_color.map(|v| v as f32);
+    let op = h.app.ui.mask_overlay_opacity / 100.0 * 0.4;
+    let off: Vec<_> = photo.iter().zip(&held).filter(|(p, l)| (0..3).any(|k| (l[k] - (p[k] + (col[k] - p[k]) * op)).abs() > 12.0)).collect();
+    assert!(off.is_empty(), "{} of 74 points off the 40 % tint, first {:?}", off.len(), off.first());
+    pointer(&mut h, json!([{"kind": "up", "x": 0.85, "y": y}]));
+    // (the committed mask's pin sits on the stroke)
+    h.app.ui.mask_pins = false;
+    h.settle(SETTLE);
+    let done = stroke_centreline(&h, y);
+    for (l, k) in held.iter().zip(&done) {
+        assert!((0..3).all(|i| (l[i] - k[i]).abs() < 24.0), "live {l:?} vs committed {k:?}");
+    }
+}
+
 /// What the photo shows along the centreline of [`hold_fast_stroke`]'s stroke at height `y`, away
 /// from the cursor ring at its end.
 fn stroke_centreline(h: &Headless, y: f32) -> Vec<[f32; 3]> {
@@ -2437,6 +2550,32 @@ fn painting_a_mask_with_settings_shows_its_effect_not_red() {
     assert!(h.app.brush_live.is_some(), "O: the overlay colour while painting");
     pointer(&mut h, json!([{"kind": "up", "x": 0.3, "y": 0.3}]));
     h.settle(SETTLE);
+}
+
+/// On a mask with settings the stroke goes to the photo while painted: at the Density set, so the
+/// effect doesn't show at full strength and drop to the set density on release.
+#[test]
+fn a_live_stroke_on_a_mask_with_settings_carries_the_brush_density() {
+    let mut h = detail("panel.masking");
+    h.settle(SETTLE);
+    exec(&mut h, "tool.brush", json!({"new": true}));
+    h.app.ui.brush_auto_mask = false;
+    brush_at(&mut h, 0.2, 0.5);
+    exec(&mut h, "mask.adjust", json!({"values": {"exposure": 1.0}}));
+    let r = h.request("ui.set", json!({"brushDensity": 40.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let last = |h: &Headless| {
+        develop(h).masks.last().and_then(|m| {
+            m.components.iter().rev().find_map(|c| if let MaskShape::Brush { strokes } = &c.shape { strokes.last().cloned() } else { None })
+        })
+    };
+    pointer(&mut h, json!([{"kind": "down", "x": 0.2, "y": 0.7}, {"kind": "drag", "x": 0.25, "y": 0.7}, {"kind": "drag", "x": 0.3, "y": 0.7}]));
+    assert!(matches!(h.app.gesture, Some(crate::panels::detail::Gesture::Brush { live: Some(_), .. })), "a live stroke");
+    let held = last(&h).expect("the stroke is on the photo while painted");
+    assert!(held.density < 100.0, "while painted: density {}", held.density);
+    pointer(&mut h, json!([{"kind": "up", "x": 0.3, "y": 0.7}]));
+    h.settle(SETTLE);
+    assert_eq!(last(&h).map(|s| s.density), Some(held.density), "the release keeps the density shown while painting");
 }
 
 /// A live stroke the photo refused (here: more pressure values than points) is not live: the release
