@@ -156,6 +156,8 @@ x1, y1}, mode?, area?, tracking?}`, normalized to the upright photo (absent when
 `view.reduceMotion {on?, follow?}` (follows macOS Reduce Motion until set; `{on}` sets it, `{follow: true}` goes back to the system (refused, changing nothing, where the host has no system setting to read, or its reader has not answered yet), no params toggles what is in effect, and `{follow: false}` is the same as no params; replies `{on, followsSystem}`) is Settings ▸ Interface ▸ Reduce motion: the
 click-zoom and `view.zoomToggle` land at once, egui's widget easing and every spinner (a busy button's too) stop, scrolling to a photo jumps instead of gliding, and every indeterminate progress bar's sweep
 stands still; fades (toasts, the slideshow) stay.
+`view.doubleClickToGrid {on?}` (off by default; replies `{on}`) makes a double-click on the loupe's photo go back
+to the grid as `view.back` (Esc) does, instead of toggling the zoom.
 `photo.readFocusPoints {ids?, wait?}` reads the point for photos imported before it was read, from a few KB of each
 file, on a background job (activity kind `focus`); `wait: true` returns the run's counts when done. The app calls
 `focus.pump {pace}` every frame to drive it.
