@@ -14,6 +14,13 @@
   and dragging a crop handle shows it beside the pointer as it changes, so you can keep a minimum resolution while
   you crop (issue #4106).
 
+### AI Defringe
+- Optics ▸ Defringe has an AI Defringe switch with an Amount. It removes colour fringes of every hue (purple,
+  blue-violet and green edges from the lens) with a trained model and leaves real colours alone. Install a model of your
+  own in Settings ▸ AI Defringe: LightCraft comes with none. Each photo's correction is made once in the background and
+  kept, so switching it off and on or moving Amount is instant, and an export makes it if it is missing. See
+  [AI Defringe](ai-defringe.md).
+
 ### Space opens a photo from the grid
 - In the Grid and the Square Grid, Space opens the active photo in Detail, fitted to the window, as in Lightroom
   Classic (issue #4417). There, Space toggles the zoom as before.
