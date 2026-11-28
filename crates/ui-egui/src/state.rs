@@ -47,6 +47,10 @@ pub struct UiState {
     /// The right panel F8 (`view.rightPanel`) hid, which the next F8 shows again.
     #[serde(skip)]
     pub right_hidden: RightPanel,
+    /// Set while Window ▸ Hide All Panels (Shift+Tab, `view.allPanels`) is in effect: what to bring
+    /// back. Showing any panel by hand makes it stale (see [`UiState::all_panels_hidden`]).
+    #[serde(skip)]
+    pub hidden_panels: Option<HiddenPanels>,
     /// The panel F8 just showed again, until [`UiState::note_right`] sees it: a tool coming back this way still closes
     /// to the panel before it, while a tool opened any other way on a hidden column closes to the hidden column.
     #[serde(skip)]
@@ -551,6 +555,7 @@ impl Default for UiState {
             right_width: RIGHT_WIDTH.default,
             right: RightPanel::Edit,
             right_hidden: RightPanel::None,
+            hidden_panels: None,
             tool_return: None,
             toggle_return: Vec::new(),
             right_shown_by_f8: None,
@@ -697,7 +702,37 @@ impl Default for UiState {
     }
 }
 
+/// The panels Hide All Panels (Shift+Tab) hid, to bring back exactly those.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HiddenPanels {
+    pub left_panel: bool,
+    pub right: RightPanel,
+    pub presets: bool,
+    pub filmstrip: bool,
+}
+
 impl UiState {
+    /// The side panels, the Presets column and the filmstrip are all hidden.
+    pub fn no_panel_shown(&self) -> bool {
+        !self.left_panel && self.right == RightPanel::None && !self.presets && !self.filmstrip
+    }
+
+    /// Hide All Panels is in effect: its snapshot is kept and nothing has been shown since. (Showing
+    /// a panel by hand drops it out of this state, so the next Shift+Tab hides again instead of
+    /// bringing back panels the user had put away.)
+    pub fn all_panels_hidden(&self) -> bool {
+        self.hidden_panels.is_some() && self.no_panel_shown()
+    }
+
+    /// Drop Hide All Panels' snapshot once a panel is shown, so closing that panel again and
+    /// pressing Shift+Tab shows the usual panels instead of the old arrangement. Run after each
+    /// UI command and once a frame (for panels shown by a click).
+    pub fn forget_hidden_panels_once_shown(&mut self) {
+        if self.hidden_panels.is_some() && !self.no_panel_shown() {
+            self.hidden_panels = None;
+        }
+    }
+
     /// Whether photos, an album, a sidebar section or a keyword are being dragged.
     pub fn drag_active(&self) -> bool {
         self.dragging_photos.is_some() || self.dragging_album.is_some() || self.dragging_section.is_some() || self.dragging_keyword.is_some()
