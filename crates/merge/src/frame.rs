@@ -152,7 +152,8 @@ pub fn detect_clip(img: &Rgb32f) -> f32 {
 }
 
 /// The colour tags a raw source starts from when the caller knows better than the file (`None`: the
-/// file's own tags). Called with the decoded raw, its samples still there, and the file's bytes.
+/// file's own tags). Called with the decoded raw, its samples and lens opcodes still there, and the file's bytes.
+/// The callback must leave those opcodes intact; it can temporarily remove them for a colour-only fit.
 pub type RawColour<'a> = dyn Fn(&mut lightcraft_raw::RawImage, &[u8]) -> Option<ColorData> + Sync + 'a;
 
 /// Decode a photo (raw or standard format) into a frame no larger than `max_edge` (when given).
@@ -224,10 +225,10 @@ fn raw_frame(
             op => op,
         })
         .collect();
-    raw.opcodes.list3.retain(|op| !op.is_lens_correction());
     if let Some(color) = colour(&mut raw, bytes) {
         raw.color = color;
     }
+    raw.opcodes.list3.retain(|op| !op.is_lens_correction());
     let small = max_edge.is_some_and(|m| m <= 1200);
     let method = if small { lightcraft_raw::Method::Bilinear } else { lightcraft_raw::Method::Ahd };
     let mut image = raw.develop(method).map_err(|e| MergeError::Decode(e.to_string()))?;
@@ -316,6 +317,23 @@ mod tests {
 
     fn frame_of(raw: RawImage, colour: &RawColour) -> Frame {
         raw_frame(raw, &[], Metadata::default(), None, None, true, colour).unwrap()
+    }
+
+    #[test]
+    fn colour_callback_sees_file_lens_but_merge_pixels_stay_uncorrected() {
+        let plain = mosaic(None);
+        let expected = frame_of(plain.clone(), &|_, _| None);
+        let mut raw = plain;
+        let warp = Opcode::WarpRectilinear { planes: vec![[1.05, -0.15, 0.0, 0.0, 0.0, 0.0]], center: [0.5, 0.5] };
+        raw.opcodes.list3.push(warp.clone());
+        let actual = frame_of(raw, &|raw, _| {
+            assert_eq!(raw.opcodes.list3, vec![warp.clone()], "resolve file correction before stripping it");
+            Some(ColorData { as_shot_neutral: Some([0.5, 1.0, 0.6]), ..Default::default() })
+        });
+        assert_eq!(actual.image, expected.image, "the merge itself still uses unwarped camera samples");
+        assert_eq!(actual.lens.len(), 1, "output DNG keeps the reference correction");
+        let FrameColor::Camera(tags) = actual.color else { panic!("camera colour") };
+        assert_eq!(tags.as_shot_neutral, Some([0.5, 1.0, 0.6]));
     }
 
     /// Issue #1144: the as-shot multipliers of a CR2, NEF… (its only white balance) were dropped on loading, so

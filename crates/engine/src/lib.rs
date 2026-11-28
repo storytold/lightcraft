@@ -16,6 +16,7 @@
 extern crate lightcraft_denoise_core as lightcraft_denoise;
 
 pub mod activity;
+pub mod aidefringe;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod apple_photos;
 pub mod availability;
@@ -96,7 +97,7 @@ use std::sync::Arc;
 pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command};
 pub use errors::{AiModel, ErrorKind};
 pub use fonts::{CRAFT_FONTS, CraftFont};
-use lightcraft_catalog::{Catalog, Filter, Op, PhotoId, Sort};
+use lightcraft_catalog::{Catalog, CatalogError, Filter, Op, PhotoId, Sort};
 use lightcraft_develop::DevelopSettings;
 pub use media::{RenderJob, SourceLevel};
 use serde_json::Value;
@@ -293,6 +294,8 @@ pub struct Session {
     pub(crate) unsaved_sidecars: std::collections::BTreeSet<PhotoId>,
     /// AI denoise: the model in use, the photos that have their picture and the work in progress.
     pub(crate) denoise: denoise::State,
+    /// AI Defringe: the installed model, the corrections in memory and the one being made.
+    pub(crate) aidefringe: aidefringe::State,
     /// Where the host keeps face models (one folder each); `None` where there is no file system (the web).
     pub face_models_dir: Option<std::path::PathBuf>,
     /// Face model downloads started this session (the staged files wait in `<face_models_dir>/.downloads`).
@@ -339,6 +342,8 @@ pub struct Session {
     /// Current time provider (ISO 8601); injectable for tests and wasm.
     pub clock: Box<dyn Fn() -> String + Send>,
     depth: u32,
+    /// [`Session::start_waiting`] is starting tasks (the commands it runs don't start more themselves).
+    starting_waiting: bool,
     /// Selected mask (Masking panel), by mask id.
     pub active_mask: Option<u32>,
     /// AI masks (SAM 3): the model and the last photo prepared for it.
@@ -418,6 +423,9 @@ pub struct Session {
     /// The long edge (px) the loupe renders at on this screen, as the frontend last said
     /// (0: not known). Standard previews are built at least this big, so the loupe can use them.
     pub loupe_edge: usize,
+    /// Builds that ended and were replaced by the next one before a frontend announced them
+    /// ([`Session::take_unreported_builds`]).
+    unreported_builds: Vec<std::sync::Arc<cmd::previews::PreviewBuild>>,
     /// Develop defaults applied on import (persisted in prefs.json).
     pub import_defaults: import::ImportDefaults,
     /// Disk budget of the library's thumbnail cache in MB (0 = default; persisted in prefs.json).
@@ -505,6 +513,7 @@ impl Session {
             reload_tickets: Default::default(),
             unsaved_sidecars: Default::default(),
             denoise: Default::default(),
+            aidefringe: Default::default(),
             face_models_dir: None,
             face_downloads: Default::default(),
             lensfun: Default::default(),
@@ -529,6 +538,7 @@ impl Session {
             media: media::MediaCache::default(),
             clock: Box::new(|| "2026-09-30T12:00:00".to_string()),
             depth: 0,
+            starting_waiting: false,
             active_mask: None,
             segmenter: segment::Segmenter::default(),
             active_spot: None,
@@ -562,6 +572,7 @@ impl Session {
             preview_build: None,
             prep: Default::default(),
             loupe_edge: 0,
+            unreported_builds: Vec::new(),
             slideshow_export: None,
             import_defaults: import::ImportDefaults::default(),
             cache_mb: 0,
@@ -594,6 +605,15 @@ impl Session {
 
     /// Run a command by id. THE entry point for every frontend.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
+        let r = self.dispatch(id, params, true);
+        // a task this command freed the lane of starts now, not at the next frame
+        self.start_waiting();
+        r
+    }
+
+    /// [`Session::execute`] without starting waiting tasks; `journal`: record the call when the command is journaled
+    /// (not for a task that waited: the call that asked for it is recorded already).
+    fn dispatch(&mut self, id: &str, params: &Value, journal: bool) -> Result<Value> {
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
         // a command that validates the photos a call names isn't held back by the selection
         if !(spec.explicit_targets && cmd::names_photos(params)) {
@@ -601,11 +621,47 @@ impl Session {
         }
         let empty = Value::Object(Default::default());
         let params = if params.is_null() { &empty } else { params };
-        self.run_command(id, spec.journal.then_some(params), |s| (spec.run)(s, params)).map_err(|e| match e {
+        self.run_command(id, (journal && spec.journal).then_some(params), |s| (spec.run)(s, params)).map_err(|e| match e {
             // a shared parameter check ([`Session::targets`]) names the command it ran for
             EngineError::BadParams { cmd, msg } if cmd.is_empty() => EngineError::BadParams { cmd: id.to_string(), msg },
             e => e,
         })
+    }
+
+    /// A build that ended is replaced by the next one before a frontend announced it: keep it (at most 16; the oldest
+    /// goes first) for [`Session::take_unreported_builds`].
+    pub(crate) fn keep_unreported_build(&mut self, build: std::sync::Arc<cmd::previews::PreviewBuild>) {
+        const KEEP: usize = 16;
+        if self.unreported_builds.len() >= KEEP {
+            self.unreported_builds.remove(0);
+        }
+        self.unreported_builds.push(build);
+    }
+
+    /// The builds that ended and were replaced before a frontend announced them, oldest first, once. The frontend
+    /// announces each (and sets its `reported`) like the current build's end.
+    pub fn take_unreported_builds(&mut self) -> Vec<std::sync::Arc<cmd::previews::PreviewBuild>> {
+        std::mem::take(&mut self.unreported_builds)
+    }
+
+    /// Start the tasks waiting in line whose lane is free ([`crate::activity`]), each by running the command it was
+    /// asked with. One that can't start is logged and the next in line goes on. Every frontend gets this after each
+    /// command; the app also calls it every frame, for a lane that frees while nothing is asked.
+    pub fn start_waiting(&mut self) {
+        if self.depth > 0 || self.starting_waiting {
+            return;
+        }
+        self.starting_waiting = true;
+        // (bounded: each turn takes one task out of a line that is at most this long)
+        for _ in 0..activity::MAX_WAITING {
+            let Some(w) = self.activity.take_ready() else { break };
+            let r = self.dispatch(&w.request.command, &w.request.params, false);
+            self.activity.started();
+            if let Err(e) = r {
+                log::warn!("{}: a task that waited could not start: {e}", w.request.command);
+            }
+        }
+        self.starting_waiting = false;
     }
 
     /// Run `f` as command `id` with what [`Session::execute`] does around every command: the
@@ -670,9 +726,20 @@ impl Session {
     /// Apply an op as one undoable step. A new edit: one that would make a smart album include
     /// itself is refused here, whichever command, task or caller asked ([`Catalog::apply_new`]);
     /// undo, redo and opening a library bring back what was and are not held to that.
+    ///
+    /// A batch that fails and cannot be rolled back whole ([`CatalogError::PartlyApplied`]) did change the catalog, so
+    /// it is journaled all the same (replaying it leaves the same changes), and what is left of its rollback is the
+    /// undo step: undoing it finishes the rollback. The error still reaches the caller.
     pub fn commit(&mut self, label: &str, op: Op) -> Result<()> {
         let fwd = op.clone();
-        let inv = self.apply_through(op, Catalog::apply_new)?;
+        let (inv, failure) = match self.apply_through(op, Catalog::apply_new) {
+            Ok(inv) => (inv, None),
+            Err(EngineError::Catalog(CatalogError::PartlyApplied { cause, remaining })) => {
+                let remaining = *remaining;
+                (remaining.clone(), Some(EngineError::Catalog(CatalogError::PartlyApplied { cause, remaining: Box::new(remaining) })))
+            }
+            Err(e) => return Err(e),
+        };
         self.pending_log.push(fwd);
         self.undo.push(UndoEntry { label: label.to_string(), op: inv, folder: None, retry_inverse: Vec::new(), retry_sidecars: Vec::new() });
         self.commits = self.commits.wrapping_add(1);
@@ -683,7 +750,7 @@ impl Session {
         for mut dropped in self.redo.drain(..) {
             self.pending_sidecar_repairs.append(&mut dropped.retry_sidecars);
         }
-        Ok(())
+        failure.map_or(Ok(()), Err)
     }
 
     /// [`Catalog::apply`] for what brings back what was (an undo or a redo).
@@ -712,7 +779,11 @@ impl Session {
                 _ => {}
             }
         }
-        let inv = apply(&mut self.catalog, op)?;
+        // (a batch that was only partly taken back changed the catalog all the same: what hangs on its photos goes too)
+        let applied = apply(&mut self.catalog, op);
+        if applied.is_err() && !matches!(applied, Err(CatalogError::PartlyApplied { .. })) {
+            return applied.map_err(Into::into);
+        }
         for id in invalidated {
             self.media.forget(id);
         }
@@ -722,17 +793,20 @@ impl Session {
         }
         #[cfg(target_arch = "wasm32")]
         let _ = replaced;
-        Ok(inv)
+        Ok(applied?)
     }
 
     /// [`Session::commit`] for an op that goes with a folder already renamed on disk; the undo
     /// step renames it back (`folder` is the undo direction: current place → old place).
     pub(crate) fn commit_with_folder(&mut self, label: &str, op: Op, folder: FolderMove) -> Result<()> {
-        self.commit(label, op)?;
-        if let Some(e) = self.undo.last_mut() {
+        let result = self.commit(label, op);
+        // (a batch only partly taken back is journaled and has its undo step too: that step moves the folder back)
+        if (result.is_ok() || matches!(result, Err(EngineError::Catalog(CatalogError::PartlyApplied { .. }))))
+            && let Some(e) = self.undo.last_mut()
+        {
             e.folder = Some(folder);
         }
-        Ok(())
+        result
     }
 
     /// The box to cut a face's picture from: the detector's, when the scan has looked at the face (every face is then shown
@@ -751,8 +825,12 @@ impl Session {
     /// an undo step, and it leaves the redo stack alone.
     pub(crate) fn apply_system(&mut self, op: Op) -> Result<()> {
         let fwd = op.clone();
-        self.catalog.apply(op)?;
-        self.pending_log.push(fwd);
+        let applied = self.catalog.apply(op);
+        if applied.is_ok() || matches!(applied, Err(CatalogError::PartlyApplied { .. })) {
+            // (a batch only partly taken back changed the catalog all the same: the journal has to say so)
+            self.pending_log.push(fwd);
+        }
+        applied?;
         Ok(())
     }
 
@@ -823,7 +901,12 @@ impl Session {
         let redo = match self.apply_with_files(&mut e, fs) {
             Ok(r) => r,
             Err(err) => {
-                self.undo.push(e);
+                // (a step that was only partly applied cannot be tried again: what is left of it goes to the other
+                // stack, where taking it back returns the catalog to where it was before the attempt)
+                match self.rest_of_partial_step(&mut e, &err) {
+                    Some(rest) => self.redo.push(rest),
+                    None => self.undo.push(e),
+                }
                 return Err(err);
             }
         };
@@ -839,6 +922,24 @@ impl Session {
         Ok(e.label)
     }
 
+    /// The step that takes back what an undo or redo step (`e`) left in the catalog when it failed part-way
+    /// ([`CatalogError::PartlyApplied`]); `None` when it failed without changing anything. The step itself cannot be
+    /// tried again from where the catalog now is, so its sidecars to repair are handed on.
+    fn rest_of_partial_step(&mut self, e: &mut UndoEntry, err: &EngineError) -> Option<UndoEntry> {
+        let EngineError::Catalog(CatalogError::PartlyApplied { remaining, .. }) = err else { return None };
+        self.pending_sidecar_repairs.append(&mut e.retry_sidecars);
+        // (the inverses of path corrections it kept come after what is left, as when a step succeeds)
+        let op = match (**remaining).clone() {
+            op if e.retry_inverse.is_empty() => op,
+            Op::Batch { mut ops } => {
+                ops.append(&mut e.retry_inverse);
+                Op::Batch { ops }
+            }
+            op => Op::Batch { ops: std::iter::once(op).chain(std::mem::take(&mut e.retry_inverse)).collect() },
+        };
+        Some(UndoEntry { label: e.label.clone(), op, folder: None, retry_inverse: Vec::new(), retry_sidecars: Vec::new() })
+    }
+
     pub fn redo_step(&mut self) -> Result<String> {
         self.redo_step_with(&rename::RealFs)
     }
@@ -848,7 +949,10 @@ impl Session {
         let undo = match self.apply_with_files(&mut e, fs) {
             Ok(r) => r,
             Err(err) => {
-                self.redo.push(e);
+                match self.rest_of_partial_step(&mut e, &err) {
+                    Some(rest) => self.undo.push(rest),
+                    None => self.redo.push(e),
+                }
                 return Err(err);
             }
         };
@@ -940,10 +1044,32 @@ impl Session {
                 }
             }
             Err(e) => {
+                if matches!(e, EngineError::Catalog(CatalogError::PartlyApplied { .. })) {
+                    // the step changed the catalog in part: the journal has to say so
+                    self.pending_log.push(entry.op.clone());
+                }
                 let back: Vec<(String, String)> = moves.iter().rev().map(|(a, b)| (b.clone(), a.clone())).collect();
-                if let Err(mut be) = rename::move_all(fs, &back) {
+                let moved_back = rename::move_all(fs, &back);
+                // (what is left of a rollback that failed part-way must follow the files as far as they went back,
+                // not move them again)
+                let e = match e {
+                    EngineError::Catalog(CatalogError::PartlyApplied { cause, remaining }) => EngineError::Catalog(CatalogError::PartlyApplied {
+                        cause,
+                        remaining: Box::new(rename::rest_after_move_back(*remaining, &moved_back)),
+                    }),
+                    e => e,
+                };
+                if let Err(mut be) = moved_back {
                     entry.retry_sidecars.append(&mut be.pending_sidecars);
-                    return Err(EngineError::Other(format!("{e}; the files could not all be moved back: {}", be.message)));
+                    let moved = format!("the files could not all be moved back: {}", be.message);
+                    return Err(match e {
+                        // (what is left of the rollback must reach the undo and redo stacks all the same)
+                        EngineError::Catalog(CatalogError::PartlyApplied { cause, remaining }) => EngineError::Catalog(CatalogError::PartlyApplied {
+                            cause: Box::new(CatalogError::Invalid(format!("{cause}; {moved}"))),
+                            remaining,
+                        }),
+                        e => EngineError::Other(format!("{e}; {moved}")),
+                    });
                 }
                 undo_folder();
                 Err(e)
@@ -1013,7 +1139,7 @@ impl Session {
             photo.height.max(1) as usize,
             &d,
             true,
-            photo.embedded_lens.as_ref(),
+            photo.embedded_lens.as_deref(),
         );
         d.crop.geometry.rect = frame.crop.rect;
         d
@@ -1047,6 +1173,14 @@ impl Session {
         if let Some(o) = delta.as_object_mut() {
             for k in ["spots", "red_eye", "version", "process"] {
                 o.remove(k);
+            }
+            // AI Defringe is per photo, like AI Denoise's switch: its switch and Amount stay with the photo they were set on
+            if let Some(optics) = o.get_mut("optics").and_then(Value::as_object_mut) {
+                optics.remove("ai_defringe");
+                optics.remove("ai_defringe_on");
+                if optics.is_empty() {
+                    o.remove("optics");
+                }
             }
             if o.is_empty() {
                 return Vec::new();
@@ -1138,7 +1272,7 @@ impl Session {
             p.height.max(1) as usize,
             &d.effective(),
             false,
-            p.embedded_lens.as_ref(),
+            p.embedded_lens.as_deref(),
         ))
     }
 
@@ -1485,6 +1619,8 @@ pub fn json_delta(old: &Value, new: &Value) -> Option<Value> {
     }
 }
 
+#[cfg(test)]
+mod lightroom_fixture;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

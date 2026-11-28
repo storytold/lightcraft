@@ -265,7 +265,7 @@ fn a_content_duplicate_raw_starts_from_its_camera_defaults() {
         p.format = "DNG".into();
         p.kind = lightcraft_catalog::MediaKind::Raw;
         p.as_shot_wb = Some((5200.0, 4.0));
-        p.embedded_lens = Some(lightcraft_develop::EmbeddedLens::default());
+        p.embedded_lens = Some(Box::default());
     });
     let mut data = sample();
     data.photos.retain(|p| number(&p.image, "masterImage") == 0);
@@ -2011,4 +2011,63 @@ fn oversized_optional_table_warns_and_is_skipped() {
     let rows = reader.optional_table("optional_history", &mut warnings).unwrap();
     assert!(rows.is_empty());
     assert!(warnings.iter().any(|warning| warning.contains("optional_history")));
+}
+
+/// A catalog whose settings decode to more than the budget keeps every row, archives the settings that fit, and
+/// says once how many it left out, instead of allocating whatever its BLOBs inflate to.
+#[test]
+fn settings_past_the_decode_budget_are_left_out_with_one_warning() {
+    use crate::lightroom_fixture::{self as fixture, Field, Table};
+    let dir = fixture::dir("history-budget");
+    let catalog = dir.join("test.lrcat");
+    let big = "x".repeat(512 << 10);
+    let rows = (1..=4).map(|id| fixture::history_step(id, 1, id as f64, "Step", Field::Blob(fixture::compressed(&big)))).collect();
+    fixture::write(&catalog, &[Table { name: "Adobe_libraryImageDevelopHistoryStep", columns: fixture::HISTORY_COLUMNS, rows }]);
+    let db = Database::open_file_with_wal(FileSource::open(&catalog).unwrap(), &[]).unwrap();
+    let reader = Reader { tables: db.live_tables().unwrap(), db };
+    let mut warnings = Vec::new();
+    let rows = reader.table_within("Adobe_libraryImageDevelopHistoryStep", true, 1 << 20, &mut warnings).unwrap();
+    assert_eq!(rows.len(), 4, "every step is still read");
+    assert_eq!(rows.iter().filter(|r| r.contains_key("text")).count(), 2, "the two steps within 1 MiB keep their settings");
+    assert_eq!(warnings, ["2 history steps archived without their settings: more than 1 MiB of settings in Adobe_libraryImageDevelopHistoryStep"]);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A stream that inflates past the length its header declares is stopped there, not inflated up to 16 MiB first.
+#[test]
+fn a_stream_longer_than_its_declared_length_is_stopped_at_that_length() {
+    let mut bytes = 10u32.to_be_bytes().to_vec();
+    bytes.extend(miniz_oxide::deflate::compress_to_vec_zlib(&[b'x'; 1024], 6));
+    assert_eq!(decode_compressed(&bytes, "settings"), Err("invalid compressed settings".to_string()));
+    let mut exact = 1024u32.to_be_bytes().to_vec();
+    exact.extend(miniz_oxide::deflate::compress_to_vec_zlib(&[b'x'; 1024], 6));
+    assert_eq!(decode_compressed(&exact, "settings").map(|text| text.len()), Ok(1024), "exactly its length decodes");
+}
+
+/// Settings that fail to decode still cost their declared length, so a catalog of damaged rows can't make the
+/// reader inflate without bound: past the budget, the rest are left out without being inflated.
+#[test]
+fn settings_that_fail_to_decode_still_count_against_the_budget() {
+    use crate::lightroom_fixture::{self as fixture, Field, Table};
+    let dir = fixture::dir("history-budget-bad");
+    let catalog = dir.join("test.lrcat");
+    let mut damaged = (512u32 << 10).to_be_bytes().to_vec();
+    damaged.extend([1, 2, 3]);
+    let rows = (1..=4).map(|id| fixture::history_step(id, 1, id as f64, "Step", Field::Blob(damaged.clone()))).collect();
+    fixture::write(&catalog, &[Table { name: "Adobe_libraryImageDevelopHistoryStep", columns: fixture::HISTORY_COLUMNS, rows }]);
+    let db = Database::open_file_with_wal(FileSource::open(&catalog).unwrap(), &[]).unwrap();
+    let reader = Reader { tables: db.live_tables().unwrap(), db };
+    let mut warnings = Vec::new();
+    let rows = reader.table_within("Adobe_libraryImageDevelopHistoryStep", true, 1 << 20, &mut warnings).unwrap();
+    assert_eq!(rows.len(), 4, "every step is still read");
+    assert_eq!(
+        warnings,
+        [
+            "image 1: history step 1: invalid compressed settings; archived without its settings",
+            "image 1: history step 2: invalid compressed settings; archived without its settings",
+            "2 history steps archived without their settings: more than 1 MiB of settings in Adobe_libraryImageDevelopHistoryStep",
+        ],
+        "the two damaged steps within 1 MiB are tried; the other two aren't"
+    );
+    let _ = std::fs::remove_dir_all(dir);
 }

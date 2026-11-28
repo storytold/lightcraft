@@ -14,8 +14,11 @@
 //! `wgsl/sam3_attention.wgsl` (flash style: online softmax, the 16 × 5184² scores of a global layer never exist),
 //! `wgsl/sam3_ops.wgsl` (layer norm, RoPE, im2col, the final reorder). All of the dispatches, with their parameters
 //! and bind groups, are built once with the weights; a forward pass uploads the pixels, submits one command buffer
-//! per layer and reads the result back once. No subgroups or shader-f16 needed. The necks and the text detector's
-//! heads stay in candle on the CPU.
+//! per layer and reads the result back once. No subgroups or shader-f16 needed. The two necks that follow the
+//! backbone run on the same device, built when first asked for (`sam3/neck.rs`).
+//!
+//! The same accelerator runs the text detector's DETR encoder (`sam3/detr.rs`) and its mask decoder (`sam3/pixel.rs`);
+//! their weights load on the first text prompt.
 //!
 //! The device is its own (like denoise's and faces'): it respects the same switches as GPU rendering
 //! (`LIGHTCRAFT_GPU`, `LIGHTCRAFT_GPU_BACKEND`, `LIGHTCRAFT_GPU_ADAPTER`, the GPU preference), the crash sentinel
@@ -27,9 +30,12 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 
 use bytemuck::Pod;
-use lightcraft_segment::{BACKBONE_PREFIX, BackboneAccel, WeightReader};
+use lightcraft_segment::{BACKBONE_PREFIX, BackboneAccel, NeckKind, WeightReader};
 use wgpu::util::DeviceExt;
 
+mod detr;
+mod neck;
+mod pixel;
 #[cfg(test)]
 mod tests;
 
@@ -53,10 +59,16 @@ const PATCH_K: usize = 3 * PATCH * PATCH;
 
 /// Longest wait for one forward pass before the device is given up on.
 const TIMEOUT: Duration = Duration::from_secs(120);
-/// Workgroup memory the attention kernel needs: its key and value tiles (2 × [`ATTENTION_KEYS`] × 64 floats).
+/// Conservative workgroup memory for key and value tiles (2 × [`ATTENTION_KEYS`] × 64 floats).
 const ATTENTION_BYTES: u32 = 2 * ATTENTION_KEYS * HEAD_DIM as u32 * 4;
-/// Keys per step of the attention kernel.
+/// The maximum keys per step; also used to bound the required workgroup memory.
 const ATTENTION_KEYS: u32 = 32;
+
+/// On DX12, creating the fully unrolled 32-key shader can be very slow on some drivers. Smaller
+/// tiles shorten initialization; the existing 32-key limits remain conservative for every backend.
+fn attention_keys(backend: wgpu::Backend) -> u32 {
+    if backend == wgpu::Backend::Dx12 { 8 } else { ATTENTION_KEYS }
+}
 /// The matrix product's blocking.
 const TILE: Tile = Tile { rows: 4, cols: 4, bk: 16 };
 
@@ -249,7 +261,7 @@ fn make_device(backends: wgpu::Backends) -> Result<Dev, String> {
     let k = Kernels {
         matmul: Matmul { pipeline: pipe("sam3 matmul", &matmul_source(TILE, false), "main"), tile: TILE },
         matmul16: OnceLock::new(),
-        attention: pipe("sam3 attention", &attention_source(ATTENTION_KEYS), "main"),
+        attention: pipe("sam3 attention", &attention_source(attention_keys(info.backend)), "main"),
         layernorm: pipe("sam3 ops", ops, "layernorm"),
         rope: pipe("sam3 ops", ops, "rope"),
         im2col: pipe("sam3 ops", ops, "im2col"),
@@ -947,6 +959,12 @@ pub struct Sam3Gpu {
     /// Bytes of work buffers on the device.
     work_bytes: u64,
     precision: Precision,
+    /// The detector's DETR encoder, loaded on the first text prompt.
+    detr: detr::Encoder,
+    /// The feature pyramids, built on first use.
+    necks: neck::Necks,
+    /// The detector's mask decoder, loaded on the first text prompt.
+    masks: pixel::MaskDecoder,
 }
 
 /// The SAM 3 backbone on the GPU with the checkpoint's weights uploaded, or why it can't run there (GPU off, missing,
@@ -1040,7 +1058,20 @@ fn build_inner(dev: &'static Dev, weights: &WeightReader, precision: Precision) 
     }
     g.channels_first(&x, &y, HIDDEN, GRID, WINDOW)?;
     let recorded = g.record();
-    Ok(Sam3Gpu { dev, recorded, work: Mutex::new(Work { pixels, out: y, staging }), weight_bytes: ld.bytes, work_bytes, precision })
+    let detr = detr::Encoder::new(weights.clone());
+    let necks = neck::Necks::new(weights.clone());
+    let masks = pixel::MaskDecoder::new(weights.clone());
+    Ok(Sam3Gpu {
+        dev,
+        recorded,
+        work: Mutex::new(Work { pixels, out: y, staging }),
+        weight_bytes: ld.bytes,
+        work_bytes,
+        precision,
+        detr,
+        necks,
+        masks,
+    })
 }
 
 /// Run `f`, the work of `stage`, turning a panic into a broken device (with the stage's name).
@@ -1060,6 +1091,16 @@ impl Sam3Gpu {
     /// Bytes of device memory the work buffers take (activations, input, read-back).
     pub fn work_bytes(&self) -> u64 {
         self.work_bytes + (TOKENS * HIDDEN * 4) as u64
+    }
+
+    /// Bytes of device memory the DETR encoder's weights and work buffers take, once a text prompt loaded them.
+    pub fn detr_bytes(&self) -> Option<(u64, u64)> {
+        self.detr.bytes()
+    }
+
+    /// Bytes of device memory the mask decoder's weights and work buffers take, once a text prompt loaded them.
+    pub fn mask_decoder_bytes(&self) -> Option<(u64, u64)> {
+        self.masks.bytes()
     }
 
     fn run(&self, pixels: &[f32]) -> Result<Vec<f32>, String> {
@@ -1088,8 +1129,60 @@ impl BackboneAccel for Sam3Gpu {
         guarded("the SAM 3 backbone", || self.run(pixels))
     }
 
+    fn neck(&self, which: NeckKind, backbone: &[f32], n: usize) -> Result<Vec<Vec<f32>>, String> {
+        if let Some(why) = broken_reason() {
+            return Err(format!("the GPU is not used any more: {why}"));
+        }
+        if let Some(why) = crate::switched_off() {
+            return Err(why);
+        }
+        guarded("a SAM 3 neck", || self.necks.run(self.dev, which, backbone, n))
+    }
+
+    fn detr_encoder(&self, image: &[f32], pos: &[f32], text: &[f32], valid: &[bool]) -> Result<Vec<f32>, String> {
+        if let Some(why) = broken_reason() {
+            return Err(format!("the GPU is not used any more: {why}"));
+        }
+        if let Some(why) = crate::switched_off() {
+            return Err(why);
+        }
+        let Some(_work) = crate::exit::enter() else { return Err("LightCraft is closing".into()) };
+        guarded("the SAM 3 DETR encoder", || self.detr.run(self.dev, image, pos, text, valid))
+    }
+
+    fn mask_decoder(
+        &self,
+        memory: &[f32],
+        text: &[f32],
+        valid: &[bool],
+        levels: [&[f32]; 2],
+        rows: &[f32],
+        bias: &[f32],
+    ) -> Result<Vec<f32>, String> {
+        if let Some(why) = broken_reason() {
+            return Err(format!("the GPU is not used any more: {why}"));
+        }
+        if let Some(why) = crate::switched_off() {
+            return Err(why);
+        }
+        let Some(_work) = crate::exit::enter() else { return Err("LightCraft is closing".into()) };
+        guarded("the SAM 3 mask decoder", || self.masks.run(self.dev, memory, text, valid, levels, rows, bias))
+    }
+
     fn closing(&self) -> bool {
         crate::shutting_down()
+    }
+
+    fn runs_necks(&self) -> bool {
+        true
+    }
+
+    fn runs_detr_encoder(&self) -> bool {
+        true
+    }
+
+    fn runs_mask_decoder(&self) -> bool {
+        true
     }
 
     fn device(&self) -> String {

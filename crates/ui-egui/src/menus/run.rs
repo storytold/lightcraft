@@ -3,20 +3,90 @@ use super::ui_commands::{UI_COMMANDS, language_from_command};
 use super::{BeforeAfter, Dialog, LightcraftApp, PickRequest, Picked, RightPanel, Value, ViewMode, Zoom, json, thumb_size_view};
 
 fn panel(app: &mut LightcraftApp, ctx: &egui::Context, p: RightPanel, name: &str) {
-    if app.ui.right == p && crate::docking::exposed(app, crate::docking::Panel::Tools) {
-        app.ui.right = RightPanel::None;
+    // toggled off: back to exactly what the right column showed before (in the same frame: no flash, no jump),
+    // closed when it was closed (note 21)
+    let exposed = crate::docking::exposed(app, crate::docking::Panel::Tools);
+    let tool_before = app.ui.tool.clone();
+    let on = app.ui.toggle_panel(p, exposed);
+    // toggled off: the panel put back brings its own tool back (Masking's Brush, Remove's Heal or Clone)
+    let tool_restored = !on && app.ui.tool != tool_before;
+    if !on {
         app.toast(ctx, crate::i18n::tr_format!("{name} Off", name = crate::i18n::tr(name)));
     } else {
-        app.ui.right = p;
         app.toast(ctx, crate::i18n::tr_format!("{name} On", name = crate::i18n::tr(name)));
         if p.is_edit_tool() && !matches!(app.ui.view, ViewMode::Detail) {
             app.ui.view = ViewMode::Detail;
         }
     }
-    if p != RightPanel::Masking && app.ui.tool != "wbPicker" {
+    if !tool_restored && p != RightPanel::Masking && app.ui.tool != "wbPicker" {
         app.ui.tool.clear();
     }
+    app.ui.note_right();
     let _ = app.session.end_interaction();
+}
+
+/// `view.colorMixer`: the Color Mixer's tab, Adjust mode, HSL group and Color-mode band, each
+/// optional; the Edit panel opens on it. Returns the layout now shown.
+fn color_mixer_layout(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
+    use crate::panels::edit::{MIXER_ADJUST, MIXER_GROUPS, MIXER_TABS};
+    let choose = |key: &str, items: &[(&str, &str)]| -> Result<Option<String>, String> {
+        match p.get(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::String(v)) if items.iter().any(|(_, k)| k == v) => Ok(Some(v.clone())),
+            Some(other) => {
+                let keys: Vec<&str> = items.iter().map(|(_, k)| *k).collect();
+                Err(format!("view.colorMixer: `{key}` must be one of {}, not {other}", keys.join(", ")))
+            }
+        }
+    };
+    let bands: Vec<(&str, &str)> = lightcraft_develop::MIXER_BANDS.iter().map(|b| (*b, *b)).collect();
+    let (tab, adjust, group, band) =
+        (choose("tab", &MIXER_TABS)?, choose("adjust", &MIXER_ADJUST)?, choose("group", &MIXER_GROUPS)?, choose("band", &bands)?);
+    if let Some(v) = tab {
+        app.ui.mixer_tab = v;
+    }
+    if let Some(v) = adjust {
+        app.ui.mixer_adjust = v;
+    }
+    if let Some(v) = group {
+        app.ui.mixer_group = v;
+    }
+    if let Some(v) = band {
+        app.ui.mixer_mode = v;
+    }
+    // coming from another panel puts its tool down (Masking's colour picker would keep taking the photo's clicks),
+    // as the panel switch does; the White Balance picker and the mixer's own tools stay
+    let mixer_tool = matches!(app.ui.tool.as_str(), "pointColor" | "tat:hue" | "tat:sat" | "tat:lum");
+    if app.ui.right != RightPanel::Edit && app.ui.tool != "wbPicker" && !mixer_tool {
+        app.ui.tool.clear();
+    }
+    crate::panels::edit::drop_hidden_mixer_tool(app);
+    // (a drag in Remove or Masking is finished first, so later edits aren't previews of it)
+    let _ = app.session.end_interaction();
+    app.ui.right = RightPanel::Edit;
+    app.ui.view = ViewMode::Detail;
+    // (full-screen preview and a slideshow show only the photo: the mixer would not appear)
+    if app.ui.slideshow.is_some() {
+        crate::panels::slideshow::end(app);
+    }
+    app.ui.fullscreen = false;
+    if !app.ui.section_open("color") {
+        app.ui.toggle_section("color");
+    }
+    // (Solo Mode closes the Light section that holds the Curve: its targeted adjustment would go on adjusting a
+    // curve no longer shown)
+    if app.ui.single_panel && app.ui.tool == "tat:curve" {
+        app.ui.tool.clear();
+    }
+    if !app.ui.flyout_open("mixer") {
+        app.ui.toggle_flyout("mixer");
+    }
+    // (a B&W photo shows its B&W mix, never the Point Color tab; the choice is kept for colour photos)
+    let bw = app.session.active().and_then(|id| app.session.develop_of(id)).is_some_and(|d| crate::is_bw(&d));
+    let tab = if bw { "mixer" } else { app.ui.mixer_tab.as_str() };
+    // (the band the panel shows: a value from before the bands, such as "hue", shows the first)
+    let band = lightcraft_develop::MIXER_BANDS.iter().copied().find(|b| *b == app.ui.mixer_mode).unwrap_or("red");
+    Ok(json!({"tab": tab, "adjust": app.ui.mixer_adjust, "group": app.ui.mixer_group, "band": band}))
 }
 
 /// With the Remove panel open, choose the Remove brush unless one already is, so painting works
@@ -641,26 +711,61 @@ fn ui_commands_4(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
             // Classic's F8: hide the right panel, and bring back the same one next time (Edit when
             // none was hidden). Hiding a tool ends it, as closing its panel does.
             if app.ui.right != RightPanel::None && crate::docking::exposed(app, crate::docking::Panel::Tools) {
-                app.ui.right_hidden = app.ui.right;
-                app.ui.right = RightPanel::None;
-                if app.ui.tool != "wbPicker" {
-                    app.ui.tool.clear();
-                }
-                let _ = app.session.end_interaction();
+                hide_right_panel(app);
             } else if app.ui.right == RightPanel::None {
-                let p = match std::mem::take(&mut app.ui.right_hidden) {
-                    RightPanel::None => RightPanel::Edit,
-                    p => p,
-                };
-                app.ui.right = p;
-                if p.is_edit_tool() && !matches!(app.ui.view, ViewMode::Detail) {
-                    app.ui.view = ViewMode::Detail;
-                }
-                remove_brush(app);
+                show_right_panel(app, true);
             }
             // A right panel that is open but not showing (minimized, or behind another tab)
             // keeps its mode; reveal_command brings it to the front.
             Ok(json!({"open": app.ui.right != RightPanel::None}))
+        }
+        "view.allPanels" => {
+            // Classic's Shift+Tab: hide the side panels, the Presets column and the filmstrip,
+            // remembering what was shown; again, bring back exactly that. With nothing shown and
+            // nothing remembered it shows the usual panels. {hide?: bool} forces the direction.
+            if !(p.is_object() || p.is_null()) {
+                return Some(Err(format!("view.allPanels: parameters must be an object such as {{\"hide\": true}}, not {p}")));
+            }
+            let forced = match p.get("hide") {
+                None | Some(Value::Null) => None,
+                Some(Value::Bool(b)) => Some(*b),
+                Some(other) => return Some(Err(format!("view.allPanels: `hide` must be true or false, not {other}"))),
+            };
+            let u = &app.ui;
+            let hide = forced.unwrap_or(!u.all_panels_hidden() && !(u.no_panel_shown() && u.hidden_panels.is_none()));
+            if hide {
+                if !app.ui.no_panel_shown() {
+                    let u = &mut app.ui;
+                    u.hidden_panels =
+                        Some(crate::state::HiddenPanels { left_panel: u.left_panel, right: u.right, presets: u.presets, filmstrip: u.filmstrip });
+                    u.left_panel = false;
+                    u.presets = false;
+                    u.filmstrip = false;
+                    if u.right != RightPanel::None {
+                        hide_right_panel(app);
+                    }
+                }
+            } else {
+                match app.ui.hidden_panels.take() {
+                    Some(was) if app.ui.no_panel_shown() => {
+                        app.ui.left_panel = was.left_panel;
+                        app.ui.presets = was.presets;
+                        app.ui.filmstrip = was.filmstrip;
+                        if was.right != RightPanel::None {
+                            show_right_panel(app, false);
+                        }
+                    }
+                    _ => {
+                        app.ui.left_panel = true;
+                        app.ui.filmstrip = true;
+                        if app.ui.right == RightPanel::None {
+                            show_right_panel(app, false);
+                        }
+                    }
+                }
+            }
+            // whether every panel is hidden now (also when they already were, with nothing to bring back)
+            Ok(json!({"hidden": app.ui.no_panel_shown()}))
         }
         "view.beforeAfter" => {
             app.ui.before_after = if app.ui.before_after == BeforeAfter::SideBySide { BeforeAfter::Off } else { BeforeAfter::SideBySide };
@@ -692,7 +797,7 @@ fn ui_commands_4(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
         }
         "view.zoomToggle" => {
             // the same ratio a click on the photo zooms to; zooming in centres on the camera's focus
-            // point when the photo has one (View ▸ Zoom to Focus Point)
+            // point when the photo has one (View ▸ Loupe Overlay ▸ Zoom to Focus Point)
             let zoom_in = app.ui.zoom == Zoom::Fit;
             app.ui.zoom = if zoom_in { Zoom::Percent(app.ui.click_zoom as f32) } else { Zoom::Fit };
             app.ui.zoom_anim = true;
@@ -799,8 +904,25 @@ fn ui_commands_5(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             Ok(Value::Null)
         }
         "view.maskOverlay" => {
-            app.ui.mask_overlay = p.get("show").and_then(Value::as_bool).unwrap_or(!app.ui.mask_overlay);
-            Ok(json!({"maskOverlay": app.ui.mask_overlay}))
+            // O shows or hides what is on screen now: an overlay that showed by itself (a mask
+            // without settings yet) is hidden for that mask
+            let selected = app.session.active().and_then(|id| app.session.develop_of(id)).and_then(|d| {
+                app.session
+                    .active_mask
+                    .and_then(|mid| d.masks.iter().find(|m| m.id == mid).map(|m| (mid, crate::panels::detail::overlay_shown(app, m))))
+            });
+            let shown = selected.is_some_and(|s| s.1) || (selected.is_none() && app.ui.mask_overlay);
+            let show = p.get("show").and_then(Value::as_bool).unwrap_or(!shown);
+            app.ui.mask_overlay = show;
+            let photo = app.session.active();
+            if let Some(key) = selected.and_then(|s| photo.map(|p| (p, s.0))) {
+                // each hidden mask stays hidden until O shows it again (not until another is hidden)
+                app.ui.mask_overlay_hidden.retain(|k| *k != key);
+                if !show {
+                    app.ui.mask_overlay_hidden.push(key);
+                }
+            }
+            Ok(json!({"maskOverlay": show}))
         }
         "view.maskOverlayAll" => {
             app.ui.mask_overlay_all = !app.ui.mask_overlay_all;
@@ -1050,7 +1172,7 @@ fn ui_commands_7(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             Ok(Value::Null)
         }
         "tool.done" => {
-            // Return commits a tool panel (crop, remove, red eye, masking): back to Edit
+            // Return commits a tool panel (crop, remove, red eye, masking): back to the panel before it
             use RightPanel::*;
             if app.ui.dialog.is_none() && matches!(app.ui.right, Crop | Remove | RedEye | Masking) {
                 if app.ui.right == Crop {
@@ -1058,10 +1180,12 @@ fn ui_commands_7(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
                 }
                 let _ = app.session.end_interaction();
                 app.ui.tool.clear();
-                app.ui.right = Edit;
+                // back to the panel shown before the tool (hidden if it was)
+                app.ui.right = app.ui.leave_tool();
             }
             Ok(Value::Null)
         }
+        "view.colorMixer" => color_mixer_layout(app, p),
         "panel.close" => {
             app.ui.right = RightPanel::None;
             app.ui.presets = false;
@@ -1093,6 +1217,21 @@ fn ui_commands_8(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
         }),
         s if s.starts_with("tool.") => {
             let tool = &s["tool.".len()..];
+            // a Brush stroke ends before another tool takes over (its release would go unseen: the next
+            // stroke would carry on from it), and before a Brush request that makes a new mask or component
+            // (what was painted stays on the mask it was painted on); a live one closes its undo step, so a
+            // new mask isn't folded into the "Brush" step
+            let creates = p.get("new").and_then(Value::as_bool) == Some(true) || p.get("op").is_some();
+            if (tool != "brush" || creates)
+                && let Some(crate::panels::detail::Gesture::Brush { live, .. }) = &app.gesture
+            {
+                let went_live = live.is_some();
+                app.gesture = None;
+                app.brush_live = None;
+                if went_live {
+                    let _ = app.run("develop.endInteraction", json!({}));
+                }
+            }
             match tool {
                 "none" => app.ui.tool.clear(),
                 "guidedUpright" => {
@@ -1122,7 +1261,6 @@ fn ui_commands_8(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
                             return Some(Err(e));
                         }
                         app.ui.brush_erase = false;
-                        app.ui.mask_overlay = true;
                     }
                     app.ui.right = RightPanel::Masking;
                     app.ui.view = ViewMode::Detail;
@@ -2290,4 +2428,35 @@ fn file_export_curve_presets_command(app: &mut LightcraftApp, ctx: &egui::Contex
         app.toast(ctx, crate::i18n::tr_format!("Exported {} point curve preset{}", v["count"], if v["count"] == 1 { "" } else { "s" }));
     }
     r
+}
+
+/// F8 and Hide All Panels hide the right panel: it is remembered for the next F8, and a tool in
+/// use ends, as closing its panel does.
+fn hide_right_panel(app: &mut LightcraftApp) {
+    app.ui.right_hidden = app.ui.right;
+    app.ui.right = RightPanel::None;
+    // noted now, not at the frame's end: a command after it in the same frame (a batch of control
+    // requests) opens a tool on the hidden column, not on the panel F8 hid
+    app.ui.note_right();
+    if app.ui.tool != "wbPicker" {
+        app.ui.tool.clear();
+    }
+    let _ = app.session.end_interaction();
+}
+
+/// Bring back the right panel F8 (or Hide All Panels) hid; Edit when none was. F8 opens an edit
+/// tool in the loupe (`to_detail`); Hide All Panels brings the panels back without changing the view.
+fn show_right_panel(app: &mut LightcraftApp, to_detail: bool) {
+    let p = match std::mem::take(&mut app.ui.right_hidden) {
+        RightPanel::None => RightPanel::Edit,
+        p => p,
+    };
+    app.ui.right = p;
+    // (a tool shown again this way still closes to the panel before it; noted now, as for hiding)
+    app.ui.right_shown_by_f8 = Some(p);
+    app.ui.note_right();
+    if to_detail && p.is_edit_tool() && !matches!(app.ui.view, ViewMode::Detail) {
+        app.ui.view = ViewMode::Detail;
+    }
+    remove_brush(app);
 }

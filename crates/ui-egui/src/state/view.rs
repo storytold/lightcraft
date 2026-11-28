@@ -19,7 +19,7 @@ pub enum ViewMode {
 }
 
 /// The right-hand tool/panel shown next to the tool strip.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RightPanel {
     #[default]
@@ -40,6 +40,12 @@ pub enum RightPanel {
 }
 
 impl RightPanel {
+    /// A tool that takes the panel's place while it is used (Crop, Remove, Masking, Red Eye): on
+    /// closing, the panel shown before it comes back ([`UiState::leave_tool`]).
+    pub fn is_tool(self) -> bool {
+        matches!(self, RightPanel::Crop | RightPanel::Remove | RightPanel::Masking | RightPanel::RedEye)
+    }
+
     pub fn is_edit_tool(self) -> bool {
         matches!(self, RightPanel::Edit | RightPanel::Profiles | RightPanel::Crop | RightPanel::Remove | RightPanel::Masking | RightPanel::RedEye)
     }
@@ -177,7 +183,7 @@ impl InfoOverlay {
     }
 }
 
-/// One line of the loupe's info overlay, chosen in View ▸ View Options (Lightroom Classic's Loupe
+/// One line of the loupe's info overlay, chosen in View ▸ Loupe Overlay ▸ View Options… (Lightroom Classic's Loupe
 /// Info 1 / Loupe Info 2). A line with nothing to show for a photo is left out.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

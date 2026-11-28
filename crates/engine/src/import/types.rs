@@ -141,8 +141,19 @@ pub struct ImportCandidate {
     /// `"path"` (already in the library), `"content"` (same bytes in the library or earlier in this
     /// list): skipped by the import.
     pub duplicate: Option<String>,
-    /// The photo that already has it.
+    /// The photo that already has it. On a browsed candidate (`local`): its record.
     pub existing: Option<u64>,
+    /// The file was only browsed in Local: the library has a record of it (`existing`) that is not in
+    /// the library, so it is not a duplicate and importing it promotes that record.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub local: bool,
+    /// On the first `"content"` duplicate that is a file of its own, when no library photo has its
+    /// bytes but a browsed candidate (`local`) earlier in this list does: the path of that browsed
+    /// candidate. Adding in place the browsed photo is the one brought in, and this is a copy in the
+    /// source; copying and moving leave the browsed photo out (the engine would add it where it is),
+    /// and this file is what they bring in instead.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub browsed_twin: Option<String>,
     /// Not readable.
     pub error: Option<String>,
     /// A raw variant that can't be decoded yet (why): it imports as preview only.
@@ -182,6 +193,15 @@ pub struct FileFacts {
     pub sidecar: Option<crate::sidecar::SidecarData>,
 }
 
+/// Files an import's folder walk left out ([`super::Expansion::unreadable`], [`super::Expansion::unsupported`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct Skipped {
+    /// Folders whose contents couldn't be listed.
+    pub unreadable: usize,
+    /// Files in the folders walked that are not a supported photo type (XMP sidecars not counted).
+    pub unsupported: usize,
+}
+
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct ImportReport {
     pub imported: Vec<u64>,
@@ -202,6 +222,8 @@ pub struct ImportReport {
     pub scanned: usize,
     /// Photos whose metadata/develop settings were read from an XMP sidecar (or embedded XMP).
     pub sidecars: usize,
+    /// What the folder walk left out ([`super::Expansion`]), as `library.importPreview` reports it.
+    pub skipped: Skipped,
     /// Per-photo diagnostics from foreign XMP develop settings that could not be fully carried over.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<ImportWarning>,

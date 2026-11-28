@@ -25,8 +25,8 @@ use export::{
 };
 pub use frame::{ConfirmStyle, confirm_style, list_height, prompt};
 use frame::{
-    DIALOG_CHROME_GUESS, DIALOG_MIN_BODY, DIALOG_SCREEN_MARGIN, choice_grid, choices, clicked_backdrop, dialog_body, dialog_field, field,
-    just_opened, num, only_shows, return_confirms, trailing_button_row,
+    DIALOG_CHROME_GUESS, DIALOG_MIN_BODY, DIALOG_SCREEN_MARGIN, choice_combo, choice_grid, choice_menu, choices, clicked_backdrop, dialog_body,
+    dialog_field, field, just_opened, num, only_shows, return_confirms, trailing_button_row,
 };
 pub(crate) use rename::rename_preview;
 use rename::{RENAME_PREVIEW_ROWS, person_rename_plan};
@@ -1017,7 +1017,8 @@ fn all_metadata_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
             egui::Grid::new(format!("meta-{g}")).num_columns(2).spacing([16.0, 3.0]).striped(true).show(ui, |ui| {
                 for (n, v) in list {
                     ui.label(egui::RichText::new(n).color(t.text_dim));
-                    ui.add(egui::Label::new(egui::RichText::new(v).color(t.text_label)).wrap());
+                    // values (serial numbers, lens names) are copied out of here; the field names are not
+                    ui.add(egui::Label::new(egui::RichText::new(v).color(t.text_label)).wrap().selectable(true));
                     ui.end_row();
                 }
             });
@@ -1402,9 +1403,15 @@ fn contact_sheet_summary(n: usize, pages: usize) -> String {
     crate::i18n::tr_format!("{n} selected photo{} · {pages} page{}", crate::i18n::plural_s(n), crate::i18n::plural_s(pages), n = n, pages = pages)
 }
 
+/// The width of the Export dialog's options.
+const EXPORT_BODY_W: f32 = 581.0;
+
 /// The body of the Export dialog.
 fn export_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
     let Dialog::Export { opts, full_size, resize, preset_name, limit_kb, dir } = dlg else { return };
+    // as wide as when Format was a row of buttons: its dropdowns would leave the sliders, the
+    // watermark preview and the folder path narrow
+    ui.set_min_width(EXPORT_BODY_W);
     let n = app.session.selection.ids.len().max(1);
     ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} photo{}", if n == 1 { "" } else { "s" }, n = n)).color(t.text_dim));
     export_preset_row(app, ui, opts, full_size, resize, limit_kb);
@@ -1471,20 +1478,20 @@ fn export_format_rows(ui: &mut egui::Ui, t: &Tokens, opts: &mut ExportOptions) {
     let before = opts.format;
     // "Rendered DNG" is a DNG option (below), not a format of its own in this list
     let mut shown = if opts.format == F::RenderedDng { F::Dng } else { opts.format };
-    choices(
+    choice_menu(
         ui,
         "Format",
         "exportFormat",
         &[
-            (F::Jpeg, "JPEG"),
-            (F::Png, "PNG"),
-            (F::Tiff, "TIFF"),
-            (F::Psd, "PSD"),
-            (F::Webp, "WebP"),
-            (F::Avif, "AVIF"),
-            (F::Jxl, "JPEG XL"),
-            (F::Dng, "DNG"),
-            (F::Original, "Original files"),
+            (F::Jpeg, "JPEG", "jpeg"),
+            (F::Png, "PNG", "png"),
+            (F::Tiff, "TIFF", "tiff"),
+            (F::Psd, "PSD", "psd"),
+            (F::Webp, "WebP", "webp"),
+            (F::Avif, "AVIF", "avif"),
+            (F::Jxl, "JPEG XL", "jxl"),
+            (F::Dng, "DNG", "dng"),
+            (F::Original, "Original files", "original"),
         ],
         &mut shown,
     );
@@ -1549,11 +1556,17 @@ fn export_color_rows(ui: &mut egui::Ui, t: &Tokens, opts: &mut ExportOptions) {
         ui.label(egui::RichText::new(crate::i18n::tr("Color space: sRGB (AVIF)")).color(t.text_dim));
     } else {
         use lightcraft_engine::export::OutputSpace as C;
-        choices(
+        choice_combo(
             ui,
             "Color space",
             "exportColorSpace",
-            &[(C::Srgb, "sRGB"), (C::DisplayP3, "P3"), (C::AdobeRgb, "Adobe RGB"), (C::ProPhoto, "ProPhoto"), (C::Rec2020, "Rec.2020")],
+            &[
+                (C::Srgb, "sRGB", "srgb"),
+                (C::DisplayP3, "P3", "p3"),
+                (C::AdobeRgb, "Adobe RGB", "adobeRgb"),
+                (C::ProPhoto, "ProPhoto", "proPhoto"),
+                (C::Rec2020, "Rec.2020", "rec2020"),
+            ],
             &mut opts.color_space,
         );
         if opts.effective_space() != opts.color_space {
@@ -1593,21 +1606,22 @@ fn export_quality_rows(ui: &mut egui::Ui, opts: &mut ExportOptions, limit_kb: &m
 /// Export dialog: sharpening, metadata and the watermark of a rendered photo.
 fn export_output_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut ExportOptions, full_size: bool, resize: Resize) {
     use lightcraft_engine::export::{MetadataPolicy as M, SharpenAmount as A, SharpenFor as S};
-    choices(
+    choice_combo(
         ui,
         "Sharpen",
         "exportSharpen",
-        &[(S::None, "None"), (S::Screen, "Screen"), (S::Matte, "Matte"), (S::Glossy, "Glossy")],
+        &[(S::None, "None", "none"), (S::Screen, "Screen", "screen"), (S::Matte, "Matte", "matte"), (S::Glossy, "Glossy", "glossy")],
         &mut opts.sharpen,
     );
     if opts.sharpen != S::None {
-        choices(ui, "Amount", "exportSharpenAmount", &[(A::Low, "Low"), (A::Standard, "Standard"), (A::High, "High")], &mut opts.sharpen_amount);
+        let amounts = [(A::Low, "Low", "low"), (A::Standard, "Standard", "standard"), (A::High, "High", "high")];
+        choice_menu(ui, "Amount", "exportSharpenAmount", &amounts, &mut opts.sharpen_amount);
     }
-    choices(
+    choice_menu(
         ui,
         "Metadata",
         "exportMetadata",
-        &[(M::All, "All"), (M::AllExceptCamera, "No camera"), (M::Copyright, "Copyright"), (M::None, "None")],
+        &[(M::All, "All", "all"), (M::AllExceptCamera, "No camera", "noCamera"), (M::Copyright, "Copyright", "copyright"), (M::None, "None", "none")],
         &mut opts.metadata,
     );
     if !matches!(opts.metadata, M::None | M::Copyright) {
@@ -1785,11 +1799,33 @@ fn export_destination_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Token
             });
         });
     }
+    let subfolder_widget = "field:exportSubfolder";
+    let subfolder_id = crate::text_field::id(subfolder_widget);
     field(ui, "Subfolder", |ui| {
-        crate::widgets::named(
-            ui.add(egui::TextEdit::singleline(&mut opts.subfolder).hint_text(crate::i18n::tr("none")).desired_width(f32::INFINITY)),
-            crate::i18n::tr("Subfolder"),
-        )
+        trailing_button_row(ui, |ui| {
+            let mut chosen = None;
+            let c = crate::widgets::combo_box("exportSubfolderTags").width(90.0).selected_text(crate::i18n::tr("Insert…")).show_ui(ui, |ui| {
+                if ui.selectable_label(false, "{album}").on_hover_text(crate::i18n::tr("Album name (empty outside an album view)")).clicked() {
+                    chosen = Some("{album}");
+                }
+                if ui.selectable_label(false, "{date}").on_hover_text(crate::i18n::tr("Export date (YYYYMMDD)")).clicked() {
+                    chosen = Some("{date}");
+                }
+                if ui.selectable_label(false, "{hour}").on_hover_text(crate::i18n::tr("Export time (HHMM)")).clicked() {
+                    chosen = Some("{hour}");
+                }
+            });
+            crate::widgets::name_combo(&c.response, crate::i18n::tr("Insert variable"));
+            crate::widgets::register(ui, "combo:exportSubfolderTags", c.response.rect);
+            if let Some(tag) = chosen {
+                crate::import::insert_at_cursor(ui.ctx(), subfolder_id, &mut opts.subfolder, tag);
+            }
+            crate::text_field::TextField::singleline(subfolder_widget, &mut opts.subfolder)
+                .hint(crate::i18n::tr("none  ({album}, {date}, {hour})"))
+                .label(crate::i18n::tr("Subfolder"))
+                .width(ui.available_width())
+                .show(ui);
+        });
     });
     use lightcraft_engine::export::Conflict as K;
     choices(ui, "If file exists", "exportConflict", &[(K::Unique, "Add number"), (K::Overwrite, "Overwrite"), (K::Skip, "Skip")], &mut opts.conflict);
@@ -1896,7 +1932,7 @@ fn keyword_tag_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, conf
     ui.add_space(6.0);
     if editing.is_none() {
         if let Some(p) = parent {
-            let r = ui.checkbox(inside, crate::i18n::tr_format!("Put inside “{parent}”", parent = p.replace('|', " › ")));
+            let r = ui.checkbox(inside, crate::panels::keyword_list::put_inside_label(p));
             crate::widgets::register(ui, "check:keywordInside", r.rect);
         }
         let n = app.session.selection.ids.len();
@@ -2002,9 +2038,9 @@ fn delete_effects_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
 
 /// The body of the MovePhotos dialog.
 fn move_photos_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
-    let Dialog::MovePhotos { ids, name, dont_ask, .. } = dlg else { return };
-    let n = ids.len();
-    ui.label(crate::i18n::tr_format!("Move {n} photo{} to “{}”?", if n == 1 { "" } else { "s" }, name, n = n));
+    let Dialog::MovePhotos { name, files, dont_ask, .. } = dlg else { return };
+    let n = *files;
+    ui.label(crate::i18n::tr_format!("Move {n} file{} to “{}”?", if n == 1 { "" } else { "s" }, name, n = n));
     ui.label(egui::RichText::new(crate::i18n::tr("Their files and XMP sidecars move on disk. Edit → Undo moves them back.")).color(t.text_dim));
     ui.add_space(4.0);
     let c = ui.checkbox(dont_ask, crate::i18n::tr("Don't ask again"));

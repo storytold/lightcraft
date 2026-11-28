@@ -85,3 +85,24 @@ fn probe_keyword_sidebar_cost() {
     }
     eprintln!("frame after a rating: {:?}", t.elapsed() / 10);
 }
+
+/// A keyword holding line breaks (a camera preset's whole keyword list read as one keyword by
+/// 0.8.x: "Beautiful Bride\r\n Bride and Groom\r\n …") was drawn many lines tall over the rows
+/// around it: the ghost text in the Keywords section. A row's name is drawn on one line.
+#[test]
+fn a_keyword_with_line_breaks_is_drawn_on_one_line() {
+    let mut s = Session::new();
+    let list: Vec<String> = (0..20).map(|i| format!("Wedding Keyword {i:02}")).collect();
+    let mut p =
+        Photo::new(PhotoId(1), Source::File { path: "/lightcraft-kw-test/IMG_1.jpg".into() }, "IMG_1.jpg", "JPEG", 60, 40, "2026-01-01T00:00:00");
+    p.meta.keywords = vec![list.join("\r\n "), "Solo".into()];
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let app = LightcraftApp::new(s, Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
+    let r = h.request("ui.set", json!({"view": "photoGrid", "leftPanel": true}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    let solo = h.app.widgets.iter().find(|(w, _)| w == "label:keyword:Solo").map(|(_, r)| *r).expect("the Solo row");
+    let long = h.app.widgets.iter().find(|(w, _)| w.starts_with("label:keyword:Wedding Keyword 00")).map(|(_, r)| *r).expect("the long row");
+    assert!(long.height() <= solo.height() + 0.5, "one line, as tall as any name: {long:?} vs {solo:?}");
+}

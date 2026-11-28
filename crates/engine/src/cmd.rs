@@ -5,6 +5,7 @@
 //! `edit.*` (undo/redo), and queries (`catalog.query`, `photo.inspect`, `develop.get`…).
 
 mod activity;
+mod aidefringe;
 mod before;
 pub(crate) mod browse;
 mod color;
@@ -14,6 +15,7 @@ pub mod curves;
 pub mod dcp_profiles;
 pub(crate) mod denoise;
 mod develop;
+pub(crate) use develop::{prepare_photo_for_wb_partial, wb_partial_names_one_field};
 mod edit;
 mod export;
 pub(crate) mod face_detect;
@@ -178,6 +180,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(geocode::specs());
         v.extend(filters::specs());
         v.extend(denoise::specs());
+        v.extend(aidefringe::specs());
         v.extend(face_models::specs());
         v.extend(face_detect::specs());
         v.extend(face_recognize::specs());
