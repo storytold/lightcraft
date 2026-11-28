@@ -13,6 +13,13 @@
 - `library.import` now reports what its folder walk left out, `skipped: {unreadable, unsupported}`, as
   `library.importPreview` already did, so a script or MCP client can tell a skipped file from a missing one (#4319).
 
+### Shift+Tab hides all the panels
+- Window ▸ Hide All Panels (Shift+Tab, Lightroom Classic's Toggle All Panels) hides the left sidebar, the right panel,
+  the Presets column and the filmstrip; the next press brings back exactly what was shown, so a panel that was already
+  hidden stays hidden. Showing a panel by hand in between starts over, and with no panel shown and nothing to bring
+  back it shows the usual panels. A keymap that gives Shift+Tab to another command
+  keeps it, and in a text field Shift+Tab still moves the keyboard focus (carries #1195).
+
 ### AI Defringe
 - Optics ▸ Defringe has an AI Defringe switch with an Amount. It removes colour fringes of every hue (purple,
   blue-violet and green edges from the lens) with a trained model and leaves real colours alone. Install a model of your

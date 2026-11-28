@@ -71,6 +71,8 @@ impl LightcraftApp {
         }
         let now = self.tick_now();
         self.drain_control(ctx);
+        // a panel shown since Hide All Panels drops its snapshot (commands do it as they run)
+        self.ui.forget_hidden_panels_once_shown();
         self.apply_settings(ctx);
         if self.queued_input_needs_repaint() {
             ctx.request_repaint();
