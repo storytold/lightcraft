@@ -32,6 +32,7 @@ fn raw_frame(image: Rgb32f, color: &ColorData, wb_multipliers: Multipliers) -> F
         clip,
         exposure: None,
         raw: true,
+        display_referred: false,
         color: FrameColor::Camera(Box::new(color.clone())),
         orientation: Orientation::Normal,
         metadata: Metadata::default(),

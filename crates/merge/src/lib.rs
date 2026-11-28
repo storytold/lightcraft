@@ -3,6 +3,7 @@
 //! - [`frame`]: inputs — scene-linear frames from raw files (camera RGB) or standard images.
 //! - [`hdr`]: exposure brackets → one scene-linear radiance image (auto-align, exposure
 //!   normalisation, saturation-aware weighting, deghosting with an overlay).
+//! - [`response`]: the camera response of display-referred brackets (JPEG), recovered from the bracket.
 //! - [`pano`]: overlapping photos → one panorama (features, matching, RANSAC, rotation bundle
 //!   adjustment, spherical/cylindrical/perspective projection, exposure compensation, seams,
 //!   multi-band blending, boundary warp, auto crop, fill edges).
@@ -23,6 +24,7 @@ pub mod output;
 pub mod pano;
 pub mod ransac;
 pub mod refine;
+pub mod response;
 pub mod synth;
 
 pub use frame::{Frame, FrameColor, RawColour, load_frame, load_frame_with};

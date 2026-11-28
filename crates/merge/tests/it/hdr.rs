@@ -269,3 +269,81 @@ fn deghost_removes_a_bright_frames_ghost_in_a_dark_sky() {
     assert!(worst < 0.02, "the brightest frame's star is left as a ghost (peak {worst})");
     assert!(r.ghost.get(360, 210) > 0.5, "the overlay marks the ghost");
 }
+
+/// A camera's tone curve: lifts and compresses the highlights, darkens the deepest shadows; 1.0 and above is white.
+fn camera_curve(x: f32) -> f32 {
+    (1.18 * x / (x + 0.18)).clamp(0.0, 1.0).powf(1.3)
+}
+
+/// Photograph `t` at exposure `k` as a camera writing an 8-bit sRGB JPEG would: the tone curve `tone`, then the sRGB
+/// encoding in 256 levels; decoded back as the codecs do (the sRGB curve undone, the tone curve not).
+fn shoot_display(t: &Rgb32f, k: f32, tone: fn(f32) -> f32) -> Frame {
+    use lightcraft_color::transfer::{linear_to_srgb, srgb_to_linear};
+    let img = Rgb32f::from_fn(W, H, |x, y| t.get(x + M, y + M).map(|v| srgb_to_linear((linear_to_srgb(tone(v * k)) * 255.0).round() / 255.0)));
+    Frame { display_referred: true, ..Frame::from_linear_rec2020(img, Some((k as f64).log2())) }
+}
+
+/// Median log error of a merge against the truth once the merge's overall scale is taken out (a curve recovered from
+/// the bracket alone fixes radiance up to a factor), over the pixels the bracket exposes well somewhere.
+fn scaled_log_error(r: &Rgb32f, t: &Rgb32f) -> f32 {
+    let mut pairs = Vec::new();
+    for y in 0..H {
+        for x in 0..W {
+            let (got, want) = (r.get(x, y), t.get(x + M, y + M));
+            for c in 0..3 {
+                if (0.01..3.5).contains(&want[c]) && got[c] > 0.0 {
+                    pairs.push(got[c].ln() - want[c].ln());
+                }
+            }
+        }
+    }
+    let scale = pct(pairs.clone(), 0.5);
+    pct(pairs.iter().map(|d| (d - scale).abs()).collect(), 0.5)
+}
+
+const NO_ALIGN: HdrOptions = HdrOptions { align: false, deghost: Deghost::None };
+
+/// Gap 29 (#4853): JPEG brackets were merged as if their decoded values were linear light, so the camera's tone curve
+/// stayed in the radiance. The curve recovered from the bracket brings the merge far closer to the scene.
+#[test]
+fn a_jpeg_bracket_is_merged_in_linear_light_once_its_camera_curve_is_recovered() {
+    let t = truth();
+    let bracket = |display_referred: bool| -> Vec<Frame> {
+        [0.25f32, 1.0, 4.0].iter().map(|k| Frame { display_referred, ..shoot_display(&t, *k, camera_curve) }).collect()
+    };
+    let recovered = merge_hdr(bracket(true), &NO_ALIGN, &no_progress).unwrap();
+    let assumed_linear = merge_hdr(bracket(false), &NO_ALIGN, &no_progress).unwrap();
+    assert!(recovered.response.is_some(), "a curve is recovered");
+    assert!(assumed_linear.response.is_none());
+    let (with, without) = (scaled_log_error(&recovered.radiance, &t), scaled_log_error(&assumed_linear.radiance, &t));
+    eprintln!("median scaled log error: {with:.4} with the recovered curve, {without:.4} taken as linear");
+    assert!(with < 0.5 * without, "recovered curve {with}, linear assumption {without}");
+}
+
+/// A display-referred bracket that is already linear once its transfer function is undone (an sRGB PNG rendered from
+/// linear light) gets no curve: the fit can't explain it clearly better, and the merge is the one it was.
+#[test]
+fn a_bracket_that_is_already_linear_keeps_the_linear_assumption() {
+    let t = truth();
+    let frames: Vec<Frame> = [0.25f32, 1.0, 4.0].iter().map(|k| shoot_display(&t, *k, |x| x.clamp(0.0, 1.0))).collect();
+    let r = merge_hdr(frames, &NO_ALIGN, &no_progress).unwrap();
+    assert!(r.response.is_none(), "residual ratio {:?}", r.response.as_ref().map(|c| c.residual_ratio));
+}
+
+/// A bracket of flat patches gives thousands of samples that repeat a handful of levels: they don't constrain a curve
+/// over the rest of the range, so none is recovered (a smooth curve through those few levels fits them almost exactly
+/// and would replace the decode of every other level with a guess, CodeRabbit on #4854).
+#[test]
+fn a_bracket_of_a_few_flat_levels_recovers_no_curve() {
+    let patches = Rgb32f::from_fn(W + 2 * M, H + 2 * M, |x, y| match (x * 3 / (W + 2 * M), y * 2 / (H + 2 * M)) {
+        (0, 0) => [0.05; 3],
+        (1, 0) => [0.12; 3],
+        (2, 0) => [0.3; 3],
+        (0, _) => [0.08, 0.06, 0.05],
+        (1, _) => [0.2, 0.18, 0.15],
+        _ => [0.5, 0.45, 0.4],
+    });
+    let frames: Vec<Frame> = [0.25f32, 1.0, 4.0].iter().map(|k| shoot_display(&patches, *k, camera_curve)).collect();
+    let r = merge_hdr(frames, &NO_ALIGN, &no_progress).unwrap();
+    assert!(r.response.is_none(), "residual ratio {:?}", r.response.as_ref().map(|c| c.residual_ratio));
+}

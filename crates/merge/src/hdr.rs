@@ -5,7 +5,9 @@
 //!    and the output's default brightness come from it). Everything below runs in that order, so
 //!    the result is the same whatever order the frames come in.
 //! 2. **Auto align** ([`crate::align`]): each frame is registered to the reference and resampled
-//!    into its geometry.
+//!    into its geometry. **Camera response** ([`crate::response`]): display-referred frames (JPEG…) with exposure
+//!    times then have the camera's tone curve recovered from the bracket (Debevec & Malik 1997) and undone, when it
+//!    explains the bracket clearly better than linear light.
 //! 3. **Exposure normalisation.** The exposure ratio between brightness-adjacent frames is
 //!    measured robustly — the median of log ratios over pixels well exposed in both — and chained
 //!    to the reference; EXIF is the fallback when too few pixels overlap. Radiance
@@ -92,6 +94,9 @@ pub struct HdrResult {
     /// The inputs' as-shot white-balance multipliers they agree on ([`crate::frame::consensus_multipliers`]), already in
     /// `color`; kept so merged brackets stitched into a panorama can vote as frames of their own.
     pub wb_multipliers: Option<[f32; 3]>,
+    /// The camera response recovered from display-referred inputs and undone before merging; `None` when the inputs
+    /// were taken as linear (raws, float files, or brackets without exposure times or that need no curve).
+    pub response: Option<crate::response::ResponseCurve>,
 }
 
 /// Long edge (at most) of the frames the deghost test compares: small moving things (a star at 200 mm) still span a few
@@ -200,6 +205,22 @@ pub fn merge_hdr(mut frames: Vec<Frame>, opts: &HdrOptions, progress: &Progress)
         }
     }
     check(progress, 0.45, "Normalising exposures")?;
+
+    // 2b. display-referred frames (JPEG…) carry the camera's tone curve: recover it from the bracket and undo it, so
+    // the ratios and the mean below see linear light. It needs every frame's exposure time; without them, or when the
+    // curve explains the bracket no better than linear light does, the frames are taken as linear, as before.
+    let response = match &exif {
+        Some(e) if frames.iter().all(|f| f.display_referred) && e.iter().any(|v| (v - e[0]).abs() > 0.1) => {
+            let ln_dt: Vec<f64> = e.iter().map(|v| v * std::f64::consts::LN_2).collect();
+            crate::response::recover(&frames, &valid, &ln_dt)
+        }
+        _ => None,
+    };
+    if let Some(curve) = &response {
+        for f in frames.iter_mut() {
+            curve.linearise(f);
+        }
+    }
 
     // 3. exposure ratios between brightness neighbours, chained to the reference (ln units)
     let mut step_ln = vec![0f64; n.saturating_sub(1)];
@@ -334,6 +355,7 @@ pub fn merge_hdr(mut frames: Vec<Frame>, opts: &HdrOptions, progress: &Progress)
         baseline_exposure: rf.baseline_exposure,
         lens: rf.lens.clone(),
         wb_multipliers,
+        response,
     })
 }
 
