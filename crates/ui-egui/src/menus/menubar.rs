@@ -346,7 +346,11 @@ const LAYOUT: &[(&str, &[&str])] = &[
 /// items [`expanded`] builds. A submenu without a row here lists those first, then its entries.
 const SUBMENUS: &[(&str, &str, &[&str])] = &[
     ("View", "Sort", &["*", "---", "library.refresh", "library.holdView"]),
-    ("View", "Loupe Overlay", &["view.infoOverlay", "view.viewOptions", "view.focusPoint", "view.zoomToFocus", "view.faceBoxes", "---", "*"]),
+    (
+        "View",
+        "Loupe Overlay",
+        &["view.infoOverlay", "view.viewOptions", "view.focusPoint", "view.zoomToFocus", "view.doubleClickToGrid", "view.faceBoxes", "---", "*"],
+    ),
     (
         "View",
         "Before/After",
@@ -474,6 +478,7 @@ pub fn checked(app: &LightcraftApp, id: &str) -> Option<bool> {
         "view.faceBoxes" => Some(u.face_boxes),
         "view.focusPoint" => Some(u.settings.focus_point),
         "view.zoomToFocus" => Some(u.settings.zoom_to_focus),
+        "view.doubleClickToGrid" => Some(u.settings.loupe_double_click_grid),
         "view.filmstrip" => Some(u.filmstrip),
         "view.frameRate" => Some(u.frame_rate),
         "view.histogram" => Some(u.histogram),

@@ -9,6 +9,12 @@
 
 ## Unreleased
 
+### Double-click back to the grid
+- View ▸ Loupe Overlay ▸ Double-Click Returns to Grid: with it on, a double-click on the photo in the loupe goes back to the grid (or
+  to the person's page the photo was opened from), as Esc does, so the grid and the loupe swap with the mouse as in
+  Lightroom. A single click still zooms, a moment later, once it is clear that no second click follows, so a
+  double-click never zooms in on the way. Off by default: a double-click toggles the zoom as before.
+
 ### Scripted imports say what they skipped
 - `library.import` now reports what its folder walk left out, `skipped: {unreadable, unsupported}`, as
   `library.importPreview` already did, so a script or MCP client can tell a skipped file from a missing one (#4319).

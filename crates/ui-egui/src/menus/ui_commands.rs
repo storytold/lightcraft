@@ -75,6 +75,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.faceBoxes", "Face Boxes", None, "View>Loupe Overlay"),
     ("view.focusPoint", "Focus Point", Some("Alt+F"), "View>Loupe Overlay"),
     ("view.zoomToFocus", "Zoom to Focus Point", None, "View>Loupe Overlay"),
+    ("view.doubleClickToGrid", "Double-Click Returns to Grid", None, "View>Loupe Overlay"),
     ("view.reduceMotion", "Reduce Motion", None, ""),
     ("view.reference", "Reference View", Some("Shift+R"), "View"),
     ("photo.setReference", "Set as Reference Photo", None, ""),
