@@ -344,9 +344,9 @@ fn a_proxy_from_the_previous_look_version_is_stale() {
     let path = dir.join("p.lcsp");
     std::fs::write(&path, &bytes).unwrap();
     assert!(!is_stale(&path), "this build's own proxy is up to date");
-    // Both the pre-Nikon look and the previous integration's look remain readable offline
-    // and are rebuilt when the original is available. Keep the lens provenance current.
-    for version in [13, 14] {
+    // Look 27 already recorded the lens identity, but did not align CR3 fits with lens geometry.
+    // Like the earlier proxies, it remains readable offline and is rebuilt from the online original.
+    for version in [13, 14, 27] {
         let mut older = head.clone();
         older[LOOK_FIELD] = serde_json::json!(version);
         let mut old = MAGIC.to_vec();
@@ -460,6 +460,19 @@ fn explicit_lens_identity_is_kept_by_encoder_and_scan_marker() {
     assert_eq!(marker(&dir, LOOK_MARKER), [future_fit, ENCODE_VERSION, 42, 99]);
     assert!(!look_checked(&dir), "a newer version cannot cover the current lens identity");
 
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn folder_marker_replaces_lens_fingerprints_in_either_direction_and_preserves_newer_provenance() {
+    let dir = temp("lens-marker-upgrade");
+    let fit = u64::from(crate::camera_preview::LOOK_VERSION);
+    let enc = ENCODE_VERSION;
+    for (look, encoding, old_key, expected_key) in [(fit, enc, 2, 5), (fit, enc, 99, 5), (fit, enc + 1, 99, 99)] {
+        std::fs::write(dir.join(LOOK_MARKER), format!("{look} {encoding} {old_key} 71")).unwrap();
+        mark_look_checked_with_lens_key(&dir, 5).unwrap();
+        assert_eq!(marker(&dir, LOOK_MARKER), [look, encoding, expected_key, 71]);
+    }
     std::fs::remove_dir_all(dir).unwrap();
 }
 

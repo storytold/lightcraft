@@ -321,7 +321,7 @@ fn thinned<T>(items: Vec<T>) -> impl Iterator<Item = T> {
 impl Pool {
     /// Add one raw file's colour pairs and tone samples. A photo too dark or colourless for colour pairs still gives
     /// its tone samples (the shadows the pooled curve needs) without counting toward the profile's photos. `Ok(None)`
-    /// when the file can't contribute (not an ARW, NEF or RAF without colour matrices, no usable or a black-and-white
+    /// when the file can't contribute (not a supported RAW without colour matrices, no usable or a black-and-white
     /// camera JPEG).
     pub fn add(&mut self, bytes: &[u8]) -> Result<Option<Added>, String> {
         let mut raw = lightcraft_raw::decode(bytes).map_err(|e| e.to_string())?;
