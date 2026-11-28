@@ -25,6 +25,8 @@
 //! - `λ` is scaled by the data's weight per level, so the same value holds for any number of samples.
 //! - The curve is made non-decreasing, level 0 means no light, and it is scaled so the top level is 1.0 (the frames
 //!   keep "1.0 = the white level").
+//! - No curve is fitted when the samples cover too few distinct levels (a bracket of flat patches): a smooth curve
+//!   through a few levels fits them almost exactly and says nothing about the levels between.
 //! - The curve is used only when it explains the samples clearly better than the linear assumption does
 //!   ([`MIN_GAIN`]), so brackets that are already linear (a linear 16-bit TIFF, an sRGB PNG rendered from linear light)
 //!   are left as they were.
@@ -43,6 +45,11 @@ const MID: usize = LEVELS / 2;
 const TARGET_SAMPLES: usize = 20_000;
 /// Fewer flat samples than this and no curve is fitted.
 const MIN_SAMPLES: usize = 1_000;
+/// Fewer distinct levels than this, in any channel, among the samples that tie two or more frames together, and no
+/// curve is fitted: samples that repeat a few levels (flat patches) fit a smooth curve through them almost exactly, and
+/// that curve says nothing about the levels between them. A quarter of the levels leaves the smoothness term short gaps
+/// to bridge, not most of the range.
+const MIN_DISTINCT_LEVELS: usize = LEVELS / 4;
 /// Widest spread of levels in a 3 × 3 neighbourhood, in every frame and channel, for a sample.
 const FLAT_LEVELS: usize = 6;
 /// Smoothness against data: the weight of `g″` at a level relative to the data weight an average level gets.
@@ -97,15 +104,15 @@ fn hat(z: usize) -> f64 {
 
 /// Recover the response of `frames` (one bracket, aligned, same size) from their log exposures `ln_dt` (natural log,
 /// any common offset). `valid[i]`, when given, marks the pixels frame `i` has after alignment. `None` when the
-/// brackets don't constrain a curve (too few flat samples, a degenerate fit) or the curve is not clearly better than
-/// the linear assumption.
+/// brackets don't constrain a curve (too few flat samples, too few distinct levels among them, a degenerate fit) or
+/// the curve is not clearly better than the linear assumption.
 pub fn recover(frames: &[Frame], valid: &[Option<Vec<bool>>], ln_dt: &[f64]) -> Option<ResponseCurve> {
     let n = frames.len();
     if n < 2 || ln_dt.len() != n || valid.len() != n || ln_dt.iter().any(|v| !v.is_finite()) {
         return None;
     }
     let samples = sample(frames, valid);
-    if samples.len() < MIN_SAMPLES {
+    if samples.len() < MIN_SAMPLES || (0..3).any(|c| distinct_levels(&samples, c) < MIN_DISTINCT_LEVELS) {
         return None;
     }
     let mut levels: [Vec<f32>; 3] = [Vec::new(), Vec::new(), Vec::new()];
@@ -120,6 +127,23 @@ pub fn recover(frames: &[Frame], valid: &[Option<Vec<bool>>], ln_dt: &[f64]) -> 
     }
     let residual_ratio = fitted / linear;
     (residual_ratio.is_finite() && residual_ratio < MIN_GAIN).then_some(ResponseCurve { levels, residual_ratio })
+}
+
+/// The distinct levels of channel `c` that constrain `g`: those with weight in a sample where at least two frames have
+/// weight (a sample seen in one frame only fixes its own `ln E` and nothing of the curve).
+fn distinct_levels(samples: &[Vec<[u8; 3]>], c: usize) -> usize {
+    let mut seen = [false; LEVELS];
+    for zs in samples {
+        let weighted: Vec<usize> = zs.iter().map(|z| usize::from(z[c])).filter(|&z| hat(z) > 0.0).collect();
+        if weighted.len() >= 2 {
+            for z in weighted {
+                if let Some(s) = seen.get_mut(z) {
+                    *s = true;
+                }
+            }
+        }
+    }
+    seen.iter().filter(|s| **s).count()
 }
 
 /// The levels of each frame at flat, valid pixels of a grid: `samples[s][j][c]`.

@@ -329,3 +329,21 @@ fn a_bracket_that_is_already_linear_keeps_the_linear_assumption() {
     let r = merge_hdr(frames, &NO_ALIGN, &no_progress).unwrap();
     assert!(r.response.is_none(), "residual ratio {:?}", r.response.as_ref().map(|c| c.residual_ratio));
 }
+
+/// A bracket of flat patches gives thousands of samples that repeat a handful of levels: they don't constrain a curve
+/// over the rest of the range, so none is recovered (a smooth curve through those few levels fits them almost exactly
+/// and would replace the decode of every other level with a guess, CodeRabbit on #4854).
+#[test]
+fn a_bracket_of_a_few_flat_levels_recovers_no_curve() {
+    let patches = Rgb32f::from_fn(W + 2 * M, H + 2 * M, |x, y| match (x * 3 / (W + 2 * M), y * 2 / (H + 2 * M)) {
+        (0, 0) => [0.05; 3],
+        (1, 0) => [0.12; 3],
+        (2, 0) => [0.3; 3],
+        (0, _) => [0.08, 0.06, 0.05],
+        (1, _) => [0.2, 0.18, 0.15],
+        _ => [0.5, 0.45, 0.4],
+    });
+    let frames: Vec<Frame> = [0.25f32, 1.0, 4.0].iter().map(|k| shoot_display(&patches, *k, camera_curve)).collect();
+    let r = merge_hdr(frames, &NO_ALIGN, &no_progress).unwrap();
+    assert!(r.response.is_none(), "residual ratio {:?}", r.response.as_ref().map(|c| c.residual_ratio));
+}

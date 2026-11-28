@@ -33,9 +33,10 @@ the range of their 4 × 4 neighbours so edges don't ring (`lightcraft_raster::sa
 finest detail. JPEG and other display-referred brackets (integer-coded files) carry the camera's tone curve, which
 the codecs don't undo: with every frame's exposure time, the curve is recovered from the bracket itself (Debevec &
 Malik 1997, `response.rs`: thousands of flat sample pixels, their radiances eliminated from the normal equations,
-one curve per channel) and undone before anything below. A bracket the curve explains no better than linear light
-does (under half the squared residual), or one without exposure times, is taken as linear, as before; the merge's
-info says which (`responseCurve`). Exposure ratios are measured
+one curve per channel) and undone before anything below. The curve is used only when its samples cover at least a
+quarter of the 256 levels and it leaves less than half the squared residual the linear assumption does (a ratio
+below 0.5). A bracket that fails either test, or one without exposure times, is taken as linear, as before; the
+merge's info says which (`responseCurve`). Exposure ratios are measured
 (median log ratio of well-exposed pixels between brightness neighbours), EXIF is the fallback.
 Radiance is a weighted mean in linear light, weight `k · (1 − smoothstep(0.8·clip, 0.96·clip, max
 channel within 1 px))`: a pixel next to clipped photosites was demosaiced from them and reads low in the clipped
@@ -84,8 +85,9 @@ scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB)
   360° wrap-around; flat (translating-camera) scans are fitted with the rotation model. Panoramas and HDR
   panoramas carry no lens corrections, nor does an HDR whose frames don't share an orientation (they are turned
   before merging).
-- JPEG brackets without EXIF exposure times are taken as linear light once the file's transfer function is undone
-  (the response fit needs them); the recovered curve is one per channel for the whole bracket.
+- JPEG brackets without EXIF exposure times, and those whose curve can't be recovered (too few distinct levels, as
+  in a bracket of flat patches, or a fit no better than linear), are taken as linear light once the file's
+  transfer function is undone; the recovered curve is one per channel for the whole bracket.
 - AI Denoise doesn't run on merged DNGs (they are linear RGB; the denoiser takes Bayer raws), unlike Lightroom's.
 - Boundary Warp is a separable stretch, not a content-preserving mesh warp; Fill Edges is diffusion,
   not patch synthesis.
