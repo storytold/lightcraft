@@ -16,6 +16,17 @@
 
 ## Unreleased
 
+### AI Defringe
+- Optics ▸ Defringe has an AI Defringe switch with an Amount. It removes colour fringes of every hue (purple,
+  blue-violet and green edges from the lens) with a trained model and leaves real colours alone. Install a model of your
+  own in Settings ▸ AI Defringe: LightCraft comes with none. Each photo's correction is made once in the background and
+  kept, so switching it off and on or moving Amount is instant, and an export makes it if it is missing. See
+  [AI Defringe](ai-defringe.md).
+
+### Space opens a photo from the grid
+- In the Grid and the Square Grid, Space opens the active photo in Detail, fitted to the window, as in Lightroom
+  Classic (issue #4417). There, Space toggles the zoom as before.
+
 ### Face suggestions match the same person more often
 - Each face is now read both as it is and mirrored, and the two are averaged before it is compared with the faces you
   have named. On the LFW benchmark with AuraFace, about 1 in 6 of a person's photos that used to miss the match bar now
@@ -210,6 +221,15 @@
   the selected image in Detail after the asynchronous import completes. Grid and Last continue to open launch files in
   Photo Grid. Populated-library launches without image arguments keep their saved view. (#3028)
 ## 2026-10-30
+
+### The pointer stays visible in the Flatpak on GNOME Wayland when its cursor theme loads by name
+- In the Flatpak on a Wayland desktop without the cursor-shape protocol (GNOME 46, for one), the mouse pointer could
+  vanish for good after Crop & Rotate or a brush hid it: the sandbox couldn't see any cursor theme. The Flatpak now
+  points at the host's cursor themes, as VectorCraft's does (issue #1657). Where the host's default theme is a
+  symlink the sandbox can't follow (Ubuntu's `/etc/alternatives`), name a theme once:
+  `flatpak override --user --env=XCURSOR_THEME=Adwaita ai.storyteller.lightcraft`, with in place of `Adwaita` any
+  cursor theme installed in `/usr/share/icons` or `~/.local/share/icons` (a theme in `~/.icons` also needs
+  `flatpak override --user --filesystem=~/.icons:ro ai.storyteller.lightcraft`).
 
 ### ↑ and ↓ keep the Survey together
 - In Survey (N) and Compare (C), ↑ and ↓ now step through the photos on screen, as → and ← do. Before, they ran the
