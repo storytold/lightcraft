@@ -1925,16 +1925,16 @@ fn corpus_cr3_profile_geometry_diagnostics() {
     let mut report = String::from(
         "file\tmodel\torientation\tprofile_warp\tgeometry_accepted\tplain_alignment\tchosen_alignment\tplain_structure\tchosen_structure\tplain_pairs\tchosen_pairs\tplain_look\tchosen_look\tframed_gate_scores\toriginal_gate_scores\tstatus\treason\n",
     );
-    let mut paths: Vec<_> = std::fs::read_dir(corpus.join("raw"))
-        .unwrap()
-        .flatten()
-        .map(|e| e.path())
+    let raw_dir = corpus.join("raw");
+    let mut paths: Vec<_> = std::fs::read_dir(&raw_dir)
+        .unwrap_or_else(|e| panic!("{}: {e}", raw_dir.display()))
+        .map(|entry| entry.unwrap_or_else(|e| panic!("{}: {e}", raw_dir.display())).path())
         .filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("cr3")))
         .collect();
     paths.sort();
     assert!(!paths.is_empty(), "diagnostic corpus must contain CR3 files");
     for path in paths {
-        let bytes = std::fs::read(&path).unwrap();
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         let mut raw = lightcraft_raw::decode(&bytes).unwrap();
         let correction = crate::lens_profiles::for_raw(&raw.info(), || lightcraft_meta::extract(&bytes));
         let lens = lens_geometry(&raw.opcodes.list3);
@@ -2055,9 +2055,13 @@ fn corpus_cr3_gets_a_framing_aligned_camera_look() {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"))
         .join("raw/cr3-canon-r100-raw.cr3");
-    let Ok(bytes) = std::fs::read(&path) else {
-        lightcraft_testkit::skip!(Corpus, "{} absent", path.display());
-        return;
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            lightcraft_testkit::skip!(Corpus, "{} absent", path.display());
+            return;
+        }
+        Err(e) => panic!("{}: {e}", path.display()),
     };
     let raw = match lightcraft_raw::decode(&bytes) {
         Ok(raw) => raw,
