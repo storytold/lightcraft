@@ -92,11 +92,13 @@ fn import_tool_copies_with_a_folder_template() {
     file_dated_2026_01_14(&src.join("a.png"));
     let mut b = Headless::demo();
     b.session.clock = Box::new(|| "2026-01-14T05:58:48".to_string());
-    let args =
-        json!({"paths": [src.to_string_lossy()], "mode": "copy", "destination": dest.to_string_lossy(), "organize": "{date:%Y}/{date:%Y%m%d}"});
+    let backup = base.join("backup");
+    let args = json!({"paths": [src.to_string_lossy()], "mode": "copy", "destination": dest.to_string_lossy(), "organize": "{date:%Y}/{date:%Y%m%d}",
+                      "backup": backup.to_string_lossy()});
     let r = call_tool(&mut b, "import", &args);
     assert!(!r.is_error, "{r:?}");
     assert!(dest.join("2026").join("20260114").join("a.png").is_file());
+    assert!(backup.join("2026").join("20260114").join("a.png").is_file(), "the backup mirrors the destination");
     let _ = std::fs::remove_dir_all(&base);
 }
 

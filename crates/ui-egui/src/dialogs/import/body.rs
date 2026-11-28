@@ -253,6 +253,28 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
                 d.destination.clear();
             }
         });
+        // an optional second, verified copy of each file, mirroring the destination's folders and names
+        field(ui, "Backup to", |ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            let t = Tokens::get(ui.ctx());
+            let none = d.backup.trim().is_empty();
+            let shown = if none { crate::i18n::tr("No backup copy").to_string() } else { d.backup.clone() };
+            let r = ui.label(egui::RichText::new(shown).color(if none { t.text_dim } else { t.text_label }));
+            register(ui, "label:importBackup", r.rect);
+            if app.services.pick_folder.is_some()
+                && crate::widgets::text_button(ui, "importBackup", crate::i18n::tr("Choose…"), false)
+                    .on_hover_text(crate::i18n::tr(
+                        "Also copy each file to this folder (a backup drive or a network share), with the same folders and names as above",
+                    ))
+                    .clicked()
+                && let Some(f) = app.services.pick_folder.as_mut().and_then(|f| f())
+            {
+                d.backup = f;
+            }
+            if !none && crate::widgets::text_button(ui, "importBackupClear", crate::i18n::tr("None"), false).clicked() {
+                d.backup.clear();
+            }
+        });
         field(ui, "Folders", |ui| {
             let opts = [
                 ("date", "By day (YYYY/YYYY-MM-DD)"),
@@ -331,6 +353,10 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
             let t = Tokens::get(ui.ctx());
             let r = ui.label(egui::RichText::new(crate::i18n::tr_format!("Example: {example}", example = example)).color(t.text_dim));
             register(ui, "label:importExample", r.rect);
+            if let Some(b) = example_backup(app, d) {
+                let r = ui.label(egui::RichText::new(crate::i18n::tr_format!("Backup: {example}", example = b)).color(t.text_dim));
+                register(ui, "label:importBackupExample", r.rect);
+            }
             ui.label(
                 egui::RichText::new(crate::i18n::tr("Folders and {date} use the capture time; a photo without one uses today's date."))
                     .color(t.text_dim)
@@ -643,6 +669,25 @@ pub const DEFAULT_FOLDER_TEMPLATE: &str = "{date:%Y}/{date:%Y%m%d}";
 /// Where the first selected photo would be copied to (destination, folders, name), for the
 /// dialog's example line; `None` without a photo or with an unusable folder template.
 pub fn example_destination(app: &LightcraftApp, d: &ImportDialog) -> Option<String> {
+    let root = if d.destination.trim().is_empty() {
+        app.session.library.as_ref().map_or_else(|| "Originals".to_string(), |l| l.dir.join("Originals").to_string_lossy().to_string())
+    } else {
+        d.destination.trim().trim_end_matches(['/', '\\']).to_string()
+    };
+    example_under(app, d, root)
+}
+
+/// Where the backup of that photo would go: the same folders and name, in the backup folder.
+pub fn example_backup(app: &LightcraftApp, d: &ImportDialog) -> Option<String> {
+    let root = d.backup.trim().trim_end_matches(['/', '\\']);
+    if root.is_empty() {
+        return None;
+    }
+    example_under(app, d, root.to_string())
+}
+
+/// The first selected photo's folders and name as the import gives them, under `root`.
+fn example_under(app: &LightcraftApp, d: &ImportDialog, root: String) -> Option<String> {
     let c = d.candidates.iter().zip(&d.checked).enumerate().find(|(i, (_, on))| **on && d.importable(*i)).map(|(_, (c, _))| c)?;
     let organize = match d.organize_param().ok()? {
         Some(o) => lightcraft_engine::import::Organize::parse(&o)?,
@@ -664,11 +709,6 @@ pub fn example_destination(app: &LightcraftApp, d: &ImportDialog) -> Option<Stri
         q.meta = info.meta.clone();
     }
     let name = if d.rename.trim().is_empty() { c.name.clone() } else { lightcraft_engine::rename::expand(d.rename.trim(), &q, 1) };
-    let root = if d.destination.trim().is_empty() {
-        app.session.library.as_ref().map_or_else(|| "Originals".to_string(), |l| l.dir.join("Originals").to_string_lossy().to_string())
-    } else {
-        d.destination.trim().trim_end_matches(['/', '\\']).to_string()
-    };
     let sep = std::path::MAIN_SEPARATOR_STR;
     let mut parts = vec![root];
     parts.extend(organize.folders(&q));

@@ -56,6 +56,9 @@ pub(crate) enum Fault {
     Corrupt,
     /// Removing the source fails (as on a read-only card).
     FailRemove,
+    /// A backup copy ([`backup_copy`]) comes out different from the file it copies; the main copy
+    /// is unaffected.
+    CorruptBackup,
     /// Each copy takes a little longer and notes the thread it ran on ([`copy_threads`]), to see
     /// an import's copies run side by side.
     Slow,
@@ -107,6 +110,60 @@ pub(crate) fn inside(path: &Path, dir: &Path) -> bool {
     match (fs::canonicalize(path), fs::canonicalize(dir)) {
         (Ok(p), Ok(d)) => p.starts_with(d),
         _ => false,
+    }
+}
+
+/// `path` made absolute, with symbolic links and `..` resolved, also when it doesn't exist yet:
+/// each part is followed in turn, through the links of the parts that exist, so a folder an import
+/// is about to create still lands where its existing parents' links point, and a `..` after a part
+/// that doesn't exist yet steps back from it. A Windows path always comes back in its plain form
+/// (`C:\…`, `\\server\share\…`), never the `\\?\` form canonicalizing gives, so a path whose first
+/// folder exists and one whose first folder doesn't compare alike.
+pub(crate) fn resolved(path: &Path) -> PathBuf {
+    let abs =
+        if path.is_absolute() { path.to_path_buf() } else { std::env::current_dir().map(|d| d.join(path)).unwrap_or_else(|_| path.to_path_buf()) };
+    let abs = plain_prefix(abs);
+    let mut out = PathBuf::new();
+    for part in abs.components() {
+        match part {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            std::path::Component::Normal(name) => {
+                out.push(name);
+                // (only after a name: a bare drive canonicalizes to that drive's current folder)
+                if let Ok(real) = fs::canonicalize(&out) {
+                    out = plain_prefix(real);
+                }
+            }
+            root => out.push(root),
+        }
+    }
+    out
+}
+
+/// `path` as [`resolved`] gives it, in a form to compare by: letter case doesn't tell Windows paths
+/// apart, so there it is lower-cased.
+pub(crate) fn compare_key(path: &Path) -> PathBuf {
+    let r = resolved(path);
+    if cfg!(windows) { PathBuf::from(r.to_string_lossy().to_lowercase()) } else { r }
+}
+
+/// A Windows `\\?\C:\…` or `\\?\UNC\server\…` path in its plain form (`C:\…`, `\\server\…`); any
+/// other path as it is.
+fn plain_prefix(path: PathBuf) -> PathBuf {
+    if !cfg!(windows) {
+        return path;
+    }
+    let s = path.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    match s.strip_prefix(r"\\?\") {
+        // (a drive letter and a colon: other `\\?\` paths have no plain form)
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => PathBuf::from(rest),
+        _ => path,
     }
 }
 
@@ -215,6 +272,41 @@ pub(crate) fn copy_new(src: &Path, dir: &Path, name: &str, expect: Option<lightc
         }
     }
     Err(format!("copy {}: no free name in {}", src.display(), dir.display()))
+}
+
+/// Import → backup copy ([`crate::import::ImportOptions::backup`]): copy `file`, which an import
+/// put at a place inside `root`, to the same place inside `backup` — the same folders and the same
+/// name, so the backup mirrors the destination. It gets the checks of [`copy_new`] (a new file,
+/// synced to disk, verified against `expect` or byte for byte against `file`; a bad copy is
+/// removed), but never another name: a file already there with the same bytes counts as the
+/// backup, and one with other bytes is left alone and reported. Returns the backup's path.
+pub(crate) fn backup_copy(file: &Path, root: &Path, backup: &Path, expect: Option<lightcraft_preview::Hash128>) -> Result<PathBuf, String> {
+    let rel = file.strip_prefix(root).map_err(|_| format!("{} is not inside {}: no backup copy was made", file.display(), root.display()))?;
+    let dst = backup.join(rel);
+    if let Some(dir) = dst.parent() {
+        fs::create_dir_all(dir).map_err(|e| format!("backup copy: {}: {e}", dir.display()))?;
+    }
+    // (tests: the backup's copy comes out bad, not the main one)
+    #[cfg(test)]
+    let corrupt = injected(Fault::CorruptBackup);
+    #[cfg(test)]
+    if corrupt {
+        inject(Fault::Corrupt);
+    }
+    let r = copy_verified(file, &dst, expect);
+    #[cfg(test)]
+    if corrupt {
+        inject(Fault::CorruptBackup);
+    }
+    match r {
+        Ok(()) => Ok(dst),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => match same_bytes(file, &dst) {
+            Ok(true) => Ok(dst),
+            Ok(false) => Err(format!("a different file is already at {}: it was left as it is, and no backup copy was made", dst.display())),
+            Err(e) => Err(format!("backup copy: {}: {e}", dst.display())),
+        },
+        Err(e) => Err(format!("backup copy to {}: {e} (no bad copy was left)", dst.display())),
+    }
 }
 
 /// Undo a [`place`]: remove what it created at the destination (the sources were never touched).

@@ -57,7 +57,7 @@ pub use files::{
 pub(crate) use files::{expand_noting, probe_all, probe_paths, probe_with};
 #[cfg(test)]
 use job::PreparedItem;
-pub use job::{ImportJob, Prepared, candidate_thumb_key, import, import_with};
+pub use job::{ImportJob, Prepared, backup_folder_error, backup_refusal, candidate_thumb_key, import, import_with};
 pub use reads::{MAX_SKIPPED, MAX_STUCK_READERS, ReadWatch, STALL_AFTER, StalledRead, StuckReaders};
 pub(crate) use scan::scan_files;
 pub use scan::{
@@ -67,8 +67,8 @@ pub use scan::{
 #[cfg(test)]
 use scan::{library_files, library_hashes};
 pub use types::{
-    Duplicate, FileFacts, ImportCandidate, ImportMode, ImportOptions, ImportReport, ImportUprightMode, ImportWarning, ImportWarningCode, Kept, Moved,
-    OnDeleted, Organize, Skipped,
+    BackupCopy, Duplicate, FileFacts, ImportCandidate, ImportMode, ImportOptions, ImportReport, ImportUprightMode, ImportWarning, ImportWarningCode,
+    Kept, Moved, OnDeleted, Organize, Skipped,
 };
 
 mod listed_folders;

@@ -87,6 +87,9 @@ pub struct ImportDialog {
     pub metadata_preset: String,
     /// Copy: raws are copied as DNG.
     pub dng: bool,
+    /// Copy or Move: a backup folder ("" = none) that gets a verified copy of each file, under the
+    /// same folders and name as in the destination (the `backup` param of `library.import`).
+    pub backup: String,
     /// Per candidate: the library already has it in Recently Deleted ([`ImportDialog::set_trashed`]).
     pub trashed: Vec<bool>,
     /// What to do with those: `restore` (the default: the photo comes back with its edits), `fresh`
