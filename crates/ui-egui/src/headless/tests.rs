@@ -1,5 +1,7 @@
+/// A raw photo is offered the AI Denoise switch with no set-up and one click turns it on with the built-in
+/// denoiser; Settings still offers installing a model, and a photo that is not raw is not offered it.
 #[test]
-fn detail_offers_ai_denoise_for_raw_photos_and_leads_to_its_settings() {
+fn detail_offers_ai_denoise_for_raw_photos_without_any_set_up() {
     use crate::state::Dialog;
     use lightcraft_catalog::{MediaKind, Op, Photo, PhotoId, Source};
     let mut h = demo([1400.0, 900.0]);
@@ -29,13 +31,17 @@ fn detail_offers_ai_denoise_for_raw_photos_and_leads_to_its_settings() {
     h.step();
     h.step();
     let w = widgets(&mut h);
-    assert!(w.contains("\"denoise:setup\""), "a raw photo with no model is offered the setup: {w}");
-    // One click lands in Settings, with local installation available even without a download offer.
-    let r = h.request("ui.clickWidget", json!({"id": "denoise:setup"}), t);
+    assert!(w.contains("\"denoise:enabled\"") && !w.contains("\"denoise:setup\""), "a raw photo is offered the switch, with no set-up: {w}");
+    // One click turns it on with the built-in denoiser: nothing to install first.
+    let r = h.request("ui.clickWidget", json!({"id": "denoise:enabled"}), t);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     h.step();
-    assert_eq!(h.app.ui.dialog, Some(Dialog::Settings { tab: "denoise".into() }));
+    assert_eq!(h.app.ui.dialog, None);
+    assert!(h.app.session.develop_of(id).is_some_and(|d| d.enhance.denoise_enabled()));
+    assert_eq!(h.app.session.execute("denoise.status", &json!({})).unwrap()["model"]["id"], "builtin");
+    // Settings still offers installing a model of one's own.
+    h.app.ui.dialog = Some(Dialog::Settings { tab: "denoise".into() });
     h.settle(SETTLE);
     let listed = h.app.session.execute("denoise.models.list", &json!({})).unwrap();
     assert_eq!(listed["models"].as_array().unwrap().len(), lightcraft_denoise::known::all().len(), "{listed}");
@@ -50,7 +56,7 @@ fn detail_offers_ai_denoise_for_raw_photos_and_leads_to_its_settings() {
     h.settle(SETTLE);
     h.step();
     h.step();
-    assert!(!widgets(&mut h).contains("\"denoise:setup\""), "nothing is offered for a photo denoise does not apply to");
+    assert_eq!(h.app.session.denoise_photo_state(h.app.session.active().unwrap()), lightcraft_engine::denoise::PhotoState::NotApplicable);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -527,6 +533,10 @@ fn demo_grid_snapshot_has_ui_pixels() {
     assert!(bright > 30, "no text in the top bar ({bright} bright px)");
     // thumbnails arrived (photo textures were drawn)
     assert!(h.app.renderer.thumb_textures() > 0);
+    // and are counted for benchmarks, a count that eviction doesn't lower
+    let r = h.request("ui.inspect", json!({}), SETTLE);
+    let made = r["result"]["perf"]["thumbsMade"].as_u64().unwrap_or(0);
+    assert!(made >= h.app.renderer.thumb_textures() as u64, "{}", r["result"]["perf"]);
 }
 
 #[test]
@@ -721,7 +731,7 @@ fn adding_a_face_model_shows_its_terms_and_installs_only_once_accepted() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Photo > Detect Faces without the detector offers the download: the terms first, nothing fetched before they are
+/// Photo > Metadata > Detect Faces without the detector offers the download: the terms first, nothing fetched before they are
 /// accepted, and the model's row in Settings has its Download button.
 #[test]
 fn detect_faces_without_the_detector_offers_the_download_and_fetches_nothing_before_acceptance() {
@@ -1822,6 +1832,37 @@ fn settle_waits_for_file_system_checks() {
     assert_eq!(check(&mut h), Some(true));
 }
 
+/// A file-system check that panics is no pending work for ever: the count drops (so `busy()` and `settle` go on) and the check can be asked again.
+#[test]
+fn a_file_system_check_that_panics_is_not_pending_for_ever() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static ASKED: AtomicUsize = AtomicUsize::new(0);
+    fn panics(_: &str) -> bool {
+        ASKED.fetch_add(1, Ordering::SeqCst);
+        panic!("a listing that dies");
+    }
+    let mut h = demo([800.0, 600.0]);
+    h.settle(SETTLE);
+    let check = |h: &mut Headless| {
+        let raw = HeadlessView::raw_input(h.size, 1.0, 0.0, vec![]);
+        h.view.run(raw, |ui| {
+            let _ = crate::panels::left::fs_cached(ui, "test-panics", "x", 0.0, panics);
+        });
+    };
+    check(&mut h);
+    let t0 = Instant::now();
+    while crate::panels::left::fs_cached_running(&h.view.ctx) > 0 && t0.elapsed() < SETTLE {
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(crate::panels::left::fs_cached_running(&h.view.ctx), 0, "the dead check no longer counts as running");
+    check(&mut h);
+    let t0 = Instant::now();
+    while ASKED.load(Ordering::SeqCst) < 2 && t0.elapsed() < SETTLE {
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(ASKED.load(Ordering::SeqCst), 2, "and it is asked again, not stuck as running");
+}
+
 /// Photo > Rename Photos…: the dialog previews and renames the selection.
 #[test]
 fn rename_dialog_renames_the_selection() {
@@ -2333,7 +2374,7 @@ fn preview_only_raw_shows_badge_and_notices() {
     // …which re-reads the file and says what came of it (a demo photo has none to re-read)
     let r = h.request("ui.clickWidget", json!({"id": "button:reloadPreviewOnly:info"}), t);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    // Read the timed toast before settling advances the simulated clock past its expiry.
     assert_eq!(h.app.ui.toast.clone().map(|x| x.0).as_deref(), Some("This raw variant still can't be decoded"));
     // a regular photo: no notice
     h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [other.0]}}), t);
@@ -3236,6 +3277,41 @@ fn cmd_q_quits() {
     assert!(h.quit_requested());
 }
 
+/// File → Import from Folder… on a folder that was browsed in Local offers its photos, adding
+/// them in place (they aren't "In library" yet), and confirming brings them into the library.
+#[test]
+fn import_from_folder_offers_the_photos_browsed_in_local() {
+    let mut h = demo([1300.0, 900.0]);
+    let t = Duration::from_secs(10);
+    let dir = std::env::temp_dir().join(format!("lc-ui-browsed-import-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = lightcraft_raster::Rgba8::from_fn(24, 16, |x, y| [(x * 9) as u8, (y * 12) as u8, 80, 255]);
+    let o = lightcraft_engine::export::ExportOptions { format: lightcraft_engine::export::ExportFormat::Png, ..Default::default() };
+    for (i, name) in ["a.png", "b.png"].iter().enumerate() {
+        let mut img = img.clone();
+        img.data[0][0] = i as u8; // different bytes per file
+        std::fs::write(dir.join(name), lightcraft_engine::export::encode_image(&img, &o).unwrap()).unwrap();
+    }
+    let library_before = h.app.session.catalog.photos().filter(|p| !p.local).count();
+    let r = h.request("engine.execute", json!({"command": "library.browse", "params": {"path": dir.to_string_lossy()}}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert_eq!(h.app.session.catalog.photos().filter(|p| p.local).count(), 2, "both browsed");
+    let r = h.request("engine.execute", json!({"command": "file.addFolder", "params": {"path": dir.to_string_lossy()}}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    let Some(crate::state::Dialog::Import { opts }) = &h.app.ui.dialog else { panic!("no import review: {:?}", h.app.ui.dialog) };
+    assert_eq!(opts.candidates.len(), 2);
+    assert!(opts.candidates.iter().all(|c| c.duplicate.is_none()), "browsed is not \"In library\": {:?}", opts.candidates);
+    assert_eq!(opts.selected_paths().len(), 2, "both offered, checked");
+    assert_eq!(h.request("ui.dialog.confirm", json!({}), t)["ok"], true);
+    h.settle(SETTLE);
+    assert_eq!(h.app.session.catalog.photos().filter(|p| !p.local).count(), library_before + 2, "both joined the library");
+    assert_eq!(h.app.session.catalog.photos().filter(|p| p.local).count(), 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// File → Import from Folder… opens the import review for a folder (searched recursively).
 #[test]
 fn add_folder_opens_the_import_review() {
@@ -3416,6 +3492,15 @@ fn browsing_from_the_ui_records_the_folder() {
     assert_eq!(h.app.session.visible_cloned().len(), 1);
     assert!(h.app.session.catalog.last_browsed(&root).is_some(), "the browsed folder");
     assert!(h.app.session.catalog.last_browsed(&day_s).is_some(), "the folder its photo is in");
+    // browsed again: a subfolder with only photos the library knows (nothing to import) still
+    // counts as browsed
+    h.app.session.catalog.apply(lightcraft_catalog::Op::SetBrowsed { folder: day_s.clone(), at: None }).unwrap();
+    assert!(h.app.session.catalog.last_browsed(&day_s).is_none());
+    let r = h.request("engine.execute", json!({"command": "library.browse", "params": {"path": root, "subfolders": true}}), t);
+    assert_eq!(r["result"]["scanning"], true, "{r}");
+    h.settle(SETTLE);
+    assert_eq!(h.app.session.visible_cloned().len(), 1);
+    assert!(h.app.session.catalog.last_browsed(&day_s).is_some(), "a folder of known photos only");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -3674,6 +3759,98 @@ fn import_review_dialog() {
     assert_eq!(h.app.session.catalog.len(), n0);
     h.settle(SETTLE);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Set a folder's modification time (Windows opens a folder for attributes, with backup semantics).
+fn set_folder_time(dir: &std::path::Path, at: std::time::SystemTime) {
+    #[cfg(windows)]
+    let handle = {
+        use std::os::windows::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new().write(true).access_mode(0x100).custom_flags(0x0200_0000).open(dir)
+    };
+    #[cfg(not(windows))]
+    let handle = std::fs::File::open(dir);
+    handle.unwrap().set_modified(at).unwrap();
+}
+
+/// A review's listing belongs to the import that review starts. Given a review that was
+/// cancelled, when a sidecar appears in its folder (the folder's time put back as it was, as a
+/// volume with coarse folder times would show it) and its file is imported another way (a folder
+/// given by name is walked afresh, so only a named file could meet the old listing),
+/// then the sidecar is read.
+#[test]
+fn a_cancelled_reviews_listing_is_not_used_by_another_import() {
+    let dir = std::env::temp_dir().join(format!("lc-ui-import-cancelled-review-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[9, 9, 9, 255]; 64] };
+    let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+    std::fs::write(dir.join("a.png"), png).unwrap();
+    // (old enough for the scan to vouch for the folder's time)
+    set_folder_time(&dir, std::time::SystemTime::now() - Duration::from_secs(3600));
+    let services = crate::Services { png: None, ..Default::default() };
+    let mut h = Headless::new(LightcraftApp::new(lightcraft_engine::Session::with_demo().with_fs(), services), [1300.0, 900.0], 1.0);
+    let t = Duration::from_secs(10);
+    let r = h.request("engine.execute", json!({"command": "file.addPhotos", "params": {"paths": [dir.to_string_lossy()]}}), t);
+    assert_eq!(r["result"]["scanning"], true, "{r}");
+    h.settle(SETTLE);
+    h.step_until(SETTLE, |h| matches!(h.app.ui.dialog, Some(crate::state::Dialog::Import { .. })));
+    assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::Import { .. })), "the review is open");
+    assert!(h.app.review_listed.is_some(), "the review holds its listing");
+    h.request("ui.dialog.cancel", json!({}), t);
+    assert!(h.app.review_listed.is_none(), "cancelling the review drops the listing");
+    let was = std::fs::metadata(&dir).unwrap().modified().unwrap();
+    std::fs::write(
+        dir.join("a.xmp"),
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="4"/></rdf:RDF></x:xmpmeta>"#,
+    )
+    .unwrap();
+    set_folder_time(&dir, was);
+    let r = h.request("engine.execute", json!({"command": "library.import", "params": {"paths": [dir.join("a.png").to_string_lossy()]}}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    let p = h.app.session.catalog.photos().find(|p| p.file_name == "a.png").expect("imported");
+    assert_eq!(p.rating, 4, "the sidecar that appeared after the review is read");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A review waiting behind the open one keeps its own listing. Given a review that is open, when
+/// another scan finishes (it waits for the dialog to close), then the open review still holds the
+/// folders its own scan listed, and the waiting one's are kept for when it opens.
+#[test]
+fn a_waiting_reviews_listing_does_not_replace_the_open_ones() {
+    let make = |tag: &str| {
+        let dir = std::env::temp_dir().join(format!("lc-ui-import-waiting-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[9, 9, 9, 255]; 64] };
+        let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+        std::fs::write(dir.join("a.png"), png).unwrap();
+        set_folder_time(&dir, std::time::SystemTime::now() - Duration::from_secs(3600));
+        dir
+    };
+    let (first, second) = (make("first"), make("second"));
+    let services = crate::Services { png: None, ..Default::default() };
+    let mut h = Headless::new(LightcraftApp::new(lightcraft_engine::Session::with_demo().with_fs(), services), [1300.0, 900.0], 1.0);
+    let t = Duration::from_secs(10);
+    let r = h.request("engine.execute", json!({"command": "file.addPhotos", "params": {"paths": [first.to_string_lossy()]}}), t);
+    assert_eq!(r["result"]["scanning"], true, "{r}");
+    h.step_until(SETTLE, |h| matches!(h.app.ui.dialog, Some(crate::state::Dialog::Import { .. })));
+    let listed = |h: &Headless| format!("{:?}", h.app.review_listed);
+    assert!(listed(&h).contains("-first-"), "the open review holds its own listing: {}", listed(&h));
+    let r = h.request("engine.execute", json!({"command": "file.addPhotos", "params": {"paths": [second.to_string_lossy()]}}), t);
+    assert_eq!(r["result"]["scanning"], true, "{r}");
+    h.step_until(SETTLE, |h| h.app.scan.is_none());
+    h.settle(SETTLE);
+    assert!(h.app.review_pending.is_some(), "the second review waits behind the open one");
+    assert!(listed(&h).contains("-first-") && !listed(&h).contains("-second-"), "the open review keeps its listing: {}", listed(&h));
+    // cancelled, the first review makes room for the waiting one, which brings its own listing
+    h.request("ui.dialog.cancel", json!({}), t);
+    h.step_until(SETTLE, |h| h.app.review_pending.is_none());
+    assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::Import { .. })), "the waiting review opens");
+    assert!(listed(&h).contains("-second-") && !listed(&h).contains("-first-"), "it holds its own listing: {}", listed(&h));
+    let _ = std::fs::remove_dir_all(&first);
+    let _ = std::fs::remove_dir_all(&second);
 }
 
 /// The import review offers what to do with files that are in Recently Deleted (issues #298,
@@ -4034,6 +4211,12 @@ fn import_copy_renames_into_destination() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// The instant this machine reads as the tests' clock time: an undated file takes the file's
+/// date in the host's zone, so a fixed epoch would file it on the day before west of UTC.
+fn filed_at() -> u64 {
+    lightcraft_engine::import::local_instant("2026-01-14T05:58:48").and_then(|s| u64::try_from(s).ok()).unwrap_or(0)
+}
+
 /// Import review, Copy, Folders → Custom template…: the default `{date:%Y}/{date:%Y%m%d}`
 /// files copies under `2026/20260114/`, the example line shows the full destination, and a
 /// template that would climb out of the destination is refused.
@@ -4046,13 +4229,10 @@ fn import_copy_into_a_custom_folder_template() {
     let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[40, 3, 9, 255]; 64] };
     let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
     std::fs::write(src.join("IMG_01.png"), png).unwrap();
-    // undated files are filed by the file's date (2026-01-14T05:58:48)
-    std::fs::File::options()
-        .write(true)
-        .open(src.join("IMG_01.png"))
-        .unwrap()
-        .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1_768_370_328))
-        .unwrap();
+    // Undated files are filed by the file's date, read in the host's zone (issue #2284), so
+    // the file is pinned to the instant this machine reads as 2026-01-14T05:58:48.
+    let when = std::time::UNIX_EPOCH + Duration::from_secs(filed_at());
+    std::fs::File::options().write(true).open(src.join("IMG_01.png")).unwrap().set_modified(when).unwrap();
     let dest_s = dest.to_string_lossy().to_string();
     let services = crate::Services { png: None, pick_folder: Some(Box::new(move || Some(dest_s.clone()))), ..Default::default() };
     let mut session = lightcraft_engine::Session::with_demo().with_fs();
@@ -4105,12 +4285,8 @@ fn import_move_into_a_folder_template() {
         let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[40 + i, 3, 9, 255]; 64] };
         let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
         std::fs::write(src.join(format!("IMG_0{i}.png")), png).unwrap();
-        std::fs::File::options()
-            .write(true)
-            .open(src.join(format!("IMG_0{i}.png")))
-            .unwrap()
-            .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1_768_370_328))
-            .unwrap();
+        let when = std::time::UNIX_EPOCH + Duration::from_secs(filed_at());
+        std::fs::File::options().write(true).open(src.join(format!("IMG_0{i}.png"))).unwrap().set_modified(when).unwrap();
     }
     let dest_s = dest.to_string_lossy().to_string();
     let services = crate::Services { png: None, pick_folder: Some(Box::new(move || Some(dest_s.clone()))), ..Default::default() };
@@ -4523,7 +4699,7 @@ fn info_overlay_toasts_are_painted_in_the_users_language() {
     }
 }
 
-/// ⌘J opens View ▸ View Options; its menus choose Info 1's and Info 2's lines, Use Defaults puts
+/// ⌘J opens View ▸ Loupe Overlay ▸ View Options…; its menus choose Info 1's and Info 2's lines, Use Defaults puts
 /// them back, and `view.viewOptions` sets them for an agent (refusing a line it doesn't know).
 #[test]
 fn view_options_choose_the_info_overlay_lines() {
@@ -5055,6 +5231,133 @@ fn screenshot_request_is_answered_without_a_window() {
     assert_eq!(r["ok"], true);
     let r = h.request("ui.screenshot", json!({"headless": true}), SETTLE);
     assert_eq!(r["result"]["width"], 640, "{r}");
+}
+
+/// Note 47: stepping in the loupe to a photo whose preview was built shows that preview as the
+/// photo (fitted to the loupe, no render), and standard previews are built at the loupe's size.
+#[test]
+fn the_loupe_shows_built_previews_without_rendering_again() {
+    use crate::render::Slot;
+    use lightcraft_engine::media::QuickSource;
+    let mut h = demo([1000.0, 700.0]);
+    let t = Duration::from_secs(10);
+    // nothing prepared ahead here: what the loupe shows comes from the build alone
+    h.request(
+        "engine.execute",
+        json!({"command": "prefs.setBackgroundPrep", "params": {"settings": {"library": {"ahead": 0, "previews": false}}}}),
+        t,
+    );
+    h.request("ui.set", json!({"view": "detail", "right": "none"}), t);
+    h.settle(SETTLE);
+    let edge = h.app.session.loupe_edge;
+    assert!(edge > 100, "the loupe said its size: {edge}");
+    let ids = h.app.session.visible_cloned();
+    let all: Vec<u64> = ids.iter().map(|i| i.0).collect();
+    let r = h.request("engine.execute", json!({"command": "library.buildPreviews", "params": {"wait": true, "edge": edge, "ids": all}}), t);
+    assert_eq!(r["result"]["done"], ids.len(), "{r}");
+    let next = ids.get(1).copied().expect("a second photo");
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [next.0], "active": next.0}}), t);
+    assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.get(&Slot::Main).is_some_and(|t| t.photo == next)));
+    let main = h.app.renderer.textures.get(&Slot::Main).unwrap();
+    assert_eq!(main.quick, Some(QuickSource::Cached), "the built preview is the loupe's picture");
+    let r = h.request("ui.inspect", json!({}), t);
+    assert!(r["result"]["perf"]["previewCache"]["memEntries"].as_u64().unwrap_or(0) > 0, "{}", r["result"]["perf"]["previewCache"]);
+}
+
+/// Editing, the loupe renders the photo from its source even when a built preview of it is cached
+/// (CodeRabbit on #3077): the cached view would show at once but leave the source undecoded, and
+/// the first slider draft would wait for it.
+#[test]
+fn editing_renders_the_loupe_from_its_source_not_a_built_preview() {
+    use crate::render::Slot;
+    use lightcraft_engine::media::QuickSource;
+    let mut h = demo([1000.0, 700.0]);
+    let t = Duration::from_secs(10);
+    h.request(
+        "engine.execute",
+        json!({"command": "prefs.setBackgroundPrep", "params": {"settings": {"library": {"ahead": 0, "previews": false}, "develop": {"ahead": 0}}}}),
+        t,
+    );
+    h.request("ui.set", json!({"view": "detail", "right": "none"}), t);
+    h.settle(SETTLE);
+    let edge = h.app.session.loupe_edge;
+    let ids = h.app.session.visible_cloned();
+    let all: Vec<u64> = ids.iter().map(|i| i.0).collect();
+    let r = h.request("engine.execute", json!({"command": "library.buildPreviews", "params": {"wait": true, "edge": edge, "ids": all}}), t);
+    assert_eq!(r["result"]["done"], ids.len(), "{r}");
+    h.request("ui.set", json!({"right": "edit"}), t);
+    let next = ids.get(1).copied().expect("a second photo");
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [next.0], "active": next.0}}), t);
+    assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.get(&Slot::Main).is_some_and(|t| t.photo == next)));
+    let main = h.app.renderer.textures.get(&Slot::Main).unwrap();
+    assert_ne!(main.quick, Some(QuickSource::Cached), "rendered from the source while editing");
+}
+
+/// The loupe holds background preparation back only while its render is on the way (CodeRabbit on
+/// #3077): once the photo is shown, the frames that follow don't renew the hold.
+#[test]
+fn a_shown_loupe_render_does_not_hold_background_preparation() {
+    use crate::render::Slot;
+    let mut h = demo([1000.0, 700.0]);
+    let t = Duration::from_secs(10);
+    h.request("ui.set", json!({"view": "detail", "right": "none"}), t);
+    let id = h.app.session.active().expect("an active photo");
+    let signals = || crate::panels::detail::FOREGROUND_SIGNALS.with(std::cell::Cell::get);
+    let before = signals();
+    assert!(
+        h.step_until(SETTLE, |h| h.app.renderer.textures.get(&Slot::Main).is_some_and(|t| t.photo == id) && !h.app.renderer.is_pending(Slot::Main))
+    );
+    assert!(signals() > before, "the hold was asked for while the render was on its way");
+    let shown = signals();
+    for _ in 0..10 {
+        h.step();
+    }
+    assert_eq!(signals(), shown, "no hold while the render is on screen");
+}
+
+/// The app-wide background preparation settings are kept with the app settings (`ui.json`):
+/// the saved ones reach the session at launch, and a change made through the command is saved.
+#[test]
+fn app_wide_preparation_settings_are_saved_with_the_app_settings() {
+    let mut h = demo([1000.0, 700.0]);
+    let t = Duration::from_secs(10);
+    let mut saved = lightcraft_engine::prep::PrepSettings::default();
+    saved.library.ahead = 3;
+    // (as if read from ui.json before the first frame)
+    h.app.ui.settings.background_prep = saved;
+    h.app.prep_synced = false;
+    h.step();
+    assert_eq!(h.app.session.prep.app, saved, "the saved settings reach the session");
+    h.request("engine.execute", json!({"command": "prefs.setBackgroundPrep", "params": {"settings": {"library": {"ahead": 10}}}}), t);
+    h.step();
+    assert_eq!(h.app.ui.settings.background_prep.library.ahead, 10, "a change is kept with the app settings");
+    assert_eq!(h.app.session.prep.app.library.ahead, 10);
+}
+
+/// Note 48: the loupe prepares as many photos ahead as the settings say, a few at a time, and
+/// none when that is off.
+#[test]
+fn the_loupe_prepares_the_photos_ahead_the_settings_ask_for() {
+    let mut h = demo([1000.0, 700.0]);
+    let t = Duration::from_secs(10);
+    let n = h.app.session.visible_cloned().len();
+    assert!(n >= 4, "the demo has photos to step through");
+    h.request("engine.execute", json!({"command": "prefs.setBackgroundPrep", "params": {"settings": {"library": {"ahead": 3}}}}), t);
+    h.request("ui.set", json!({"view": "detail", "right": "none"}), t);
+    h.settle(SETTLE);
+    for _ in 0..40 {
+        h.step();
+    }
+    h.settle(SETTLE);
+    // the first photo: three ahead (no photo behind it)
+    assert_eq!(h.app.renderer.prefetch_slots_asked(), 3.min(n - 1));
+    h.app.renderer.forget_all();
+    h.request("engine.execute", json!({"command": "prefs.setBackgroundPrep", "params": {"settings": {"library": {"ahead": 0}}}}), t);
+    for _ in 0..40 {
+        h.step();
+    }
+    h.settle(SETTLE);
+    assert_eq!(h.app.renderer.prefetch_slots_asked(), 0, "off: nothing prepared ahead");
 }
 
 /// A size typed in the Export dialog is the size exported: the pixel fields kept only multiples

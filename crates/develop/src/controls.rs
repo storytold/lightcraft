@@ -28,6 +28,7 @@ pub enum Section {
     Calibration,
     PointColor,
     RedEye,
+    LensBlur,
 }
 
 impl Section {
@@ -49,6 +50,7 @@ impl Section {
             Section::Calibration => "Calibration",
             Section::PointColor => "Point Color",
             Section::RedEye => "Red Eye",
+            Section::LensBlur => "Lens Blur",
         }
     }
 }
@@ -271,6 +273,7 @@ controls! {
     "optics.vignettingMidpoint" => optics.vignetting_midpoint, "Midpoint", Optics, 0, 100, 50, 1, 0, Plain;
     "optics.profileDistortion" => optics.profile_distortion, "Profile Distortion", Optics, 0, 200, 100, 1, 0, Plain;
     "optics.profileVignetting" => optics.profile_vignetting, "Profile Vignetting", Optics, 0, 200, 100, 1, 0, Plain;
+    "optics.aiDefringe" => optics.ai_defringe, "Amount", Optics, 0, 100, 0, 1, 0, Plain;
     "optics.defringePurple" => optics.defringe_purple_amount, "Purple Amount", Optics, 0, 20, 0, 1, 0, Gradient { from: "#7a7a7a", to: "#a040d0" };
     "optics.defringePurpleHueLo" => optics.defringe_purple_hue_lo, "Purple Hue Low", Optics, 0, 90, 30, 1, 0, Gradient { from: "#6040e0", to: "#d040b0" };
     "optics.defringePurpleHueHi" => optics.defringe_purple_hue_hi, "Purple Hue High", Optics, 10, 100, 70, 1, 0, Gradient { from: "#6040e0", to: "#d040b0" };
@@ -286,6 +289,9 @@ controls! {
     "geometry.scale" => geometry.scale, "Scale", Geometry, 50, 150, 100, 1, 0, Plain;
     "geometry.offsetX" => geometry.offset_x, "Offset X", Geometry, -100, 100, 0, 0.1, 1, Centered;
     "geometry.offsetY" => geometry.offset_y, "Offset Y", Geometry, -100, 100, 0, 0.1, 1, Centered;
+    "lensBlur.amount" => lens_blur.amount, "Blur Amount", LensBlur, 0, 100, 0, 1, 0, Plain;
+    "lensBlur.boost" => lens_blur.boost, "Boost", LensBlur, 0, 100, 0, 1, 0, Plain;
+    "lensBlur.transition" => lens_blur.transition, "Transition", LensBlur, 0, 100, 50, 1, 0, Plain;
     "calibration.shadowsTint" => calibration.shadows_tint, "Shadows Tint", Calibration, -100, 100, 0, 1, 0, Tint;
     "calibration.redHue" => calibration.red_hue, "Red Hue", Calibration, -100, 100, 0, 1, 0, Gradient { from: "#e0306a", to: "#e08a30" };
     "calibration.redSat" => calibration.red_sat, "Red Saturation", Calibration, -100, 100, 0, 1, 0, Gradient { from: "#7a7a7a", to: "#e03a3a" };
@@ -450,9 +456,16 @@ fn indexed_field<'a>(s: &'a mut DevelopSettings, id: &str) -> Option<&'a mut f64
 }
 
 fn indexed_get(s: &DevelopSettings, id: &str) -> Option<f64> {
-    // (a clone keeps one accessor for get and set; these lists are tiny)
-    let mut c = DevelopSettings { point_colors: s.point_colors.clone(), red_eye: s.red_eye.clone(), ..DevelopSettings::default() };
-    indexed_field(&mut c, id).map(|v| *v)
+    // one accessor for get and set: a copy of the one element read (never of the lists, which a
+    // read of every indexed control would copy once per control)
+    let (fam, i, field) = split_indexed(id)?;
+    let mut c = DevelopSettings::default();
+    match fam {
+        "pointColor" => c.point_colors.push(*s.point_colors.get(i)?),
+        "redEye" => c.red_eye.push(*s.red_eye.get(i)?),
+        _ => return None,
+    }
+    indexed_field(&mut c, &format!("{fam}.0.{field}")).map(|v| *v)
 }
 
 fn indexed_set(s: &mut DevelopSettings, id: &str, v: f64) -> bool {

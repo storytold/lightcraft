@@ -11,6 +11,8 @@ use lightcraft_pipeline::SourceInfo;
 use lightcraft_raster::Rgb32f;
 use lightcraft_raster::resample::{Filter, fit};
 
+use lightcraft_raw::dcp::DcpProfile;
+
 use crate::media::{DenoiseSpec, FileLoader, FileProbe, PairLoader, PreviewLoader, ProbeInfo, ReducedLoader};
 
 mod colour;
@@ -25,7 +27,7 @@ pub(crate) use colour::clipped_white;
 use fs::quick_image_srgb;
 pub use fs::{fs_hooks, fs_pair_loader, fs_reduced_loader};
 pub(crate) use load::{DngWhite, WbScaleOf, dng_tone_curve};
-pub use load::{load_bytes, load_vec, load_vec_pair, load_vec_reduced};
+pub use load::{load_bytes, load_bytes_decoded, load_bytes_with, load_vec, load_vec_pair, load_vec_reduced};
 #[cfg(test)]
 use preview::PLAN_PREFIX;
 pub(crate) use preview::decode_raw_preview;
@@ -58,8 +60,9 @@ impl CameraColourModel<'_> {
         lightcraft_raw::highlight::reconstruct_with(img, self.wb, HIGHLIGHT_CLIP, clipped_white(&self.matrix));
     }
 
-    /// [`Self::rebuild_highlights`] for a binned image whose clipped channels `mask` tells
-    /// ([`lightcraft_raw::RawImage::develop_binned_masked`]).
+    /// [`Self::rebuild_highlights`] for an image whose clipped channels `mask` tells: binned
+    /// ([`lightcraft_raw::RawImage::develop_binned_masked`]) or demosaiced at full size
+    /// ([`lightcraft_raw::RawImage::develop_balanced_masked`]).
     pub fn rebuild_highlights_masked(&self, img: &mut Rgb32f, mask: &[u8]) {
         lightcraft_raw::highlight::reconstruct_masked(img, self.wb, HIGHLIGHT_CLIP, clipped_white(&self.matrix), mask);
     }
@@ -81,7 +84,7 @@ impl CameraColourModel<'_> {
                     }
                     let out = hue_sat.apply_lanes(rgb);
                     for (l, p) in chunk.iter_mut().enumerate() {
-                        *p = [out[0][l], out[1][l], out[2][l]].map(|v| v.max(0.0));
+                        *p = finite([out[0][l], out[1][l], out[2][l]]);
                     }
                 }
             });
@@ -103,8 +106,48 @@ impl CameraColourModel<'_> {
             Some(tables) => tables.apply(rgb, gain),
             None => rgb.map(|v| v * gain),
         };
-        self.hue_sat.map_or(rgb, |h| h.apply(rgb)).map(|v| v.max(0.0))
+        finite(self.hue_sat.map_or(rgb, |h| h.apply(rgb)))
     }
+}
+
+/// `rgb` (linear Rec.2020) as decoding leaves it for the stages after: negative channels kept, non-finite ones zero.
+/// Near black, negative channels are sensor noise through the colour matrix, and keeping them keeps the noise zero-mean
+/// until noise reduction and the output's gamut mapping (which moves a colour toward its luminance until it is in
+/// range) deal with it. Clamping each channel at zero here kept only the positive half of every channel's noise:
+/// through a saturating camera matrix (red row 3.5, −2.4, −0.1 on a NIKON D780 profile) red and blue have the widest
+/// noise, so pushed shadows and dark frames came out magenta (a black frame pushed 4 EV rendered at sRGB (64, 28, 65)
+/// in its darkest 40%, (2, 4, 4) without the clamp). Moving each such colour toward its luminance instead still left
+/// it pink, at (34, 14, 22): any per-pixel rule that treats pixels by the sign of their noise biases the mean.
+fn finite(rgb: [f32; 3]) -> [f32; 3] {
+    rgb.map(|v| if v.is_finite() { v } else { 0.0 })
+}
+
+/// Remove Hot Pixels leaves a raw alone when more than this share of its photosites would be replaced (Settings ▸
+/// Performance ▸ Hot pixel limit, `app.hotPixelLimit`), as `f64` bits. Process-wide, like the GPU switch.
+static HOT_PIXEL_LIMIT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(lightcraft_raw::HOT_PIXEL_MAX_SHARE.to_bits());
+
+/// The share of a raw's photosites Remove Hot Pixels may replace (0..1).
+pub fn hot_pixel_limit() -> f64 {
+    f64::from_bits(HOT_PIXEL_LIMIT.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// Set [`hot_pixel_limit`]; false (nothing changed) unless `share` is a new value in 0..=1. Sources decoded before
+/// keep the old limit: the caller forgets them ([`crate::media::MediaCache::clear_sources`]).
+pub fn set_hot_pixel_limit(share: f64) -> bool {
+    if !(0.0..=1.0).contains(&share) {
+        return false;
+    }
+    HOT_PIXEL_LIMIT.swap(share.to_bits(), std::sync::atomic::Ordering::Relaxed) != share.to_bits()
+}
+
+/// What [`hot_pixel_limit`] adds to the render cache keys of `settings`: nothing at the default limit or when they
+/// don't remove hot pixels, so those renders stay valid whatever the limit.
+pub fn hot_pixel_key(settings: &lightcraft_develop::DevelopSettings) -> u64 {
+    let limit = hot_pixel_limit();
+    if !settings.removes_hot_pixels() || limit.to_bits() == lightcraft_raw::HOT_PIXEL_MAX_SHARE.to_bits() {
+        return 0;
+    }
+    limit.to_bits().wrapping_mul(0x9e37_79b9_7f4a_7c15).rotate_left(29)
 }
 
 #[cfg(test)]

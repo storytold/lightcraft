@@ -8,7 +8,7 @@
 //! pinned only (its small JPEG gives r 0.59); its render was inspected by eye.
 //! Missing files are reported as skipped.
 
-use lightcraft_raw::{RawData, decode, embedded_preview, probe_info};
+use lightcraft_raw::{RawData, RawError, RawFormat, decode, embedded_preview, probe, probe_info};
 use std::path::{Path, PathBuf};
 
 fn corpus() -> PathBuf {
@@ -17,12 +17,9 @@ fn corpus() -> PathBuf {
 
 /// Green of the decoded mosaic against the camera's embedded JPEG on a `gw × gh` grid of the active area.
 fn green_vs_camera_jpeg(raw: &lightcraft_raw::RawImage, jpeg: &[u8], gw: usize, gh: usize) -> f64 {
-    use zune_core::{bytestream::ZCursor, colorspace::ColorSpace, options::DecoderOptions};
-    let opts = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGB);
-    let mut d = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(jpeg), opts);
-    let px = d.decode().unwrap();
-    let info = d.info().unwrap();
-    let (jw, jh) = (info.width as usize, info.height as usize);
+    let img = craft_image_codecs::decode_as_with(craft_image_codecs::Format::Jpeg, jpeg, &craft_image_codecs::DecodeOptions::default()).unwrap();
+    let (jw, jh) = (img.width() as usize, img.height() as usize);
+    let px = img.as_u8().unwrap();
     let mean = |sum: Vec<f64>, n: Vec<f64>| sum.iter().zip(&n).map(|(s, n)| s / n.max(1.0)).collect::<Vec<f64>>();
     let (mut js, mut jn) = (vec![0f64; gw * gh], vec![0f64; gw * gh]);
     for y in 0..jh {
@@ -111,4 +108,22 @@ fn olympus_and_samsung_bodies_decode_like_the_camera_jpeg() {
         seen += 1;
     }
     eprintln!("Olympus / Samsung bodies checked on {seen} files");
+}
+
+/// The withdrawn compressed decoder must stay out of both sensor-decode and import-probe paths.
+/// Camera JPEG extraction is independent of sensor decoding and remains available for preview-only imports.
+#[test]
+fn compressed_olympus_bodies_are_unsupported_with_embedded_previews() {
+    for name in ["orf-olympus-em1.orf", "orf-olympus-em10iii.orf"] {
+        let path = corpus().join("raw").join(name);
+        let Ok(bytes) = std::fs::read(&path) else {
+            lightcraft_testkit::skip!(Corpus, "{} absent", path.display());
+            continue;
+        };
+        assert_eq!(probe(&bytes), Some(RawFormat::Orf), "{name}");
+        assert!(matches!(decode(&bytes), Err(RawError::Unsupported(why)) if why == "Olympus compressed ORF"), "{name}");
+        assert!(matches!(probe_info(&bytes), Err(RawError::Unsupported(why)) if why == "Olympus compressed ORF"), "{name}");
+        let jpeg = embedded_preview(&bytes).unwrap_or_else(|| panic!("{name}: no camera JPEG"));
+        assert!(jpeg.starts_with(&[0xff, 0xd8]) && jpeg.ends_with(&[0xff, 0xd9]), "{name}: invalid camera JPEG");
+    }
 }

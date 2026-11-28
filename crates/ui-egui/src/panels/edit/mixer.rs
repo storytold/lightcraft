@@ -1,10 +1,170 @@
 use super::curve::set_tat;
 use super::sliders::{control, sub_title};
-use super::{BAND_COLORS, Color32, DevelopSettings, Icon, LightcraftApp, Sense, Stroke, Tokens, hex, json, paint, register, text_button, vec2};
+use super::{
+    BAND_COLORS, Color32, DevelopSettings, Icon, LightcraftApp, Sense, Stroke, Tokens, apply_slider_out, controls, hex, json, paint, register,
+    text_button, vec2,
+};
+use egui::{Align2, pos2};
 
 // ------------------------------------------------------------------------------ colour mixer
 
+/// The Color Mixer's tabs (Mixer | Point Color), the Mixer's Adjust choice (HSL | Color) and the
+/// HSL groups (Hue | Saturation | Luminance | All), as (label, key).
+pub(crate) const MIXER_TABS: [(&str, &str); 2] = [("Mixer", "mixer"), ("Point Color", "point")];
+pub(crate) const MIXER_ADJUST: [(&str, &str); 2] = [("HSL", "hsl"), ("Color", "color")];
+pub(crate) const MIXER_GROUPS: [(&str, &str); 4] = [("Hue", "hue"), ("Saturation", "sat"), ("Luminance", "lum"), ("All", "all")];
+/// The mixer bands' names, as the HSL sliders are labelled (parallel to `MIXER_BANDS`).
+const BAND_NAMES: [&str; 8] = ["Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta"];
+
+/// A Color Mixer targeted adjustment (`tat:hue|sat|lum`) whose button the mixer's layout no
+/// longer shows is put down: a B&W photo shows Luminance's only, Point Color none, HSL only the chosen group's (all three in
+/// All), Color mode all three. Dragging on the photo would otherwise change a hidden group.
+pub(crate) fn drop_hidden_mixer_tool(app: &mut LightcraftApp) {
+    // a B&W photo's mixer is its B&W mix, with only the Luminance targeted adjustment
+    let bw = app.session.active().and_then(|id| app.session.develop_of(id)).is_some_and(|d| crate::is_bw(&d));
+    // Point Color's picker lives on its own tab, which a B&W photo doesn't have
+    if app.ui.tool == "pointColor" {
+        if bw || app.ui.mixer_tab != "point" {
+            app.ui.tool.clear();
+        }
+        return;
+    }
+    let Some(key) = app.ui.tool.strip_prefix("tat:") else { return };
+    if !matches!(key, "hue" | "sat" | "lum") {
+        return;
+    }
+    let shown = if bw {
+        key == "lum"
+    } else {
+        app.ui.mixer_tab != "point" && (app.ui.mixer_adjust == "color" || app.ui.mixer_group == "all" || app.ui.mixer_group == key)
+    };
+    if !shown {
+        app.ui.tool.clear();
+    }
+}
+
+/// The Color Mixer, laid out as in Lightroom Classic: "Mixer | Point Color" tabs; the Mixer
+/// adjusts by HSL (Hue | Saturation | Luminance | All: eight colour sliders per group, each group
+/// with its targeted adjustment) or by Color (one colour at a time). The same develop controls
+/// (`mixer.<band>.<hue|sat|lum>`) either way; a B&W photo shows its B&W mix.
 pub(super) fn mixer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
+    // (the B&W mix keeps its own Luminance targeted adjustment; a picker it doesn't show is put down first)
+    if crate::is_bw(d) {
+        drop_hidden_mixer_tool(app);
+        mixer_by_color(app, ui, d);
+        return;
+    }
+    let pick = |ui: &mut egui::Ui, id: &str, items: &[(&str, &str)], current: &str| {
+        let at = items.iter().position(|(_, k)| *k == current).unwrap_or(0);
+        egui::Frame::NONE
+            .inner_margin(egui::Margin { left: 24, right: 22, top: 6, bottom: 2 })
+            .show(ui, |ui| crate::widgets::segmented(ui, id, items, Some(at), items.len()))
+            .inner
+            .and_then(|i| items.get(i).map(|(_, k)| k.to_string()))
+    };
+    if let Some(k) = pick(ui, "mixerTab", &MIXER_TABS, &app.ui.mixer_tab) {
+        app.ui.mixer_tab = k;
+    }
+    drop_hidden_mixer_tool(app);
+    if app.ui.mixer_tab == "point" {
+        point_color(app, ui, d);
+        return;
+    }
+    let t = Tokens::get(ui.ctx());
+    egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 4, bottom: 0 }).show(ui, |ui| {
+        ui.label(egui::RichText::new(crate::i18n::tr("Adjust")).color(t.text_dim).size(11.5));
+    });
+    if let Some(k) = pick(ui, "mixerAdjust", &MIXER_ADJUST, &app.ui.mixer_adjust) {
+        app.ui.mixer_adjust = k;
+        drop_hidden_mixer_tool(app);
+    }
+    if app.ui.mixer_adjust == "color" {
+        mixer_by_color(app, ui, d);
+        return;
+    }
+    // HSL: Hue | Saturation | Luminance | All
+    egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 6, bottom: 2 }).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 14.0;
+            for (label, key) in MIXER_GROUPS {
+                if group_tab(ui, &format!("mixerGroup-{key}"), crate::i18n::tr(label), app.ui.mixer_group == key).clicked() {
+                    app.ui.mixer_group = key.to_string();
+                    drop_hidden_mixer_tool(app);
+                }
+            }
+        });
+    });
+    let groups: &[(&str, &str)] = match app.ui.mixer_group.as_str() {
+        "sat" => &MIXER_GROUPS[1..2],
+        "lum" => &MIXER_GROUPS[2..3],
+        "all" => &MIXER_GROUPS[..3],
+        _ => &MIXER_GROUPS[..1],
+    };
+    let all = groups.len() > 1;
+    for (label, key) in groups {
+        // the group's targeted adjustment (and, in All, its heading)
+        egui::Frame::NONE.inner_margin(egui::Margin { left: 20, right: 22, top: if all { 8 } else { 2 }, bottom: 0 }).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                let tool = format!("tat:{key}");
+                let active = app.ui.tool == tool;
+                let button = crate::widgets::icon_button(
+                    ui,
+                    &format!("tatMixer-{key}"),
+                    Icon::Target,
+                    vec2(24.0, 24.0),
+                    active,
+                    true,
+                    "Targeted adjustment: drag up/down on the photo to adjust the colours there",
+                );
+                // (named by its group for a screen reader: All shows three of them)
+                crate::widgets::announce_selected(
+                    &button,
+                    format!("{} ({})", crate::i18n::tr("Targeted Adjustment"), crate::i18n::tr(label)),
+                    active,
+                );
+                if button.clicked() {
+                    set_tat(app, ui.ctx(), &tool, active);
+                }
+                if all {
+                    let r = ui.label(egui::RichText::new(crate::i18n::tr(label)).color(t.text).strong().size(12.0));
+                    register(ui, format!("mixerHeading:{key}"), r.rect);
+                }
+            });
+        });
+        for (band, name) in lightcraft_develop::MIXER_BANDS.iter().zip(BAND_NAMES) {
+            let id = format!("mixer.{band}.{key}");
+            let Some(spec) = controls::find(&id) else { continue };
+            // labelled by the colour alone: the group says what it adjusts (a screen reader hears both)
+            let v = controls::get(d, &id).unwrap_or(spec.default);
+            // (both parts translated; the brackets read the same in every language the app has)
+            let spoken = format!("{} ({})", crate::i18n::tr(name), crate::i18n::tr(label));
+            let out = crate::widgets::slider_named(ui, spec, v, true, Some(name), Some(&spoken));
+            apply_slider_out(app, spec, out, |app, v| app.run("develop.set", json!({"control": id, "value": v})));
+        }
+    }
+}
+
+/// A word tab (Hue, Saturation…): bright and underlined when it is the one shown.
+fn group_tab(ui: &mut egui::Ui, id: &str, label: &str, active: bool) -> egui::Response {
+    let t = Tokens::get(ui.ctx());
+    let font = t.semibold(11.5);
+    let (r, resp) = {
+        let galley = ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text);
+        ui.allocate_exact_size(vec2(galley.size().x, 20.0), Sense::click())
+    };
+    crate::widgets::announce_selected(&resp, label.to_string(), active);
+    register(ui, format!("button:{id}"), r);
+    let colour = if active || resp.hovered() { t.text } else { t.text_dim };
+    ui.painter().text(pos2(r.left(), r.center().y), Align2::LEFT_CENTER, label, font, colour);
+    if active {
+        ui.painter().line_segment([pos2(r.left(), r.bottom() - 1.0), pos2(r.right(), r.bottom() - 1.0)], Stroke::new(1.5, t.text));
+    }
+    resp
+}
+
+/// The Mixer by colour (and a B&W photo's mix): a dot per colour, then that colour's sliders.
+fn mixer_by_color(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
     let t = Tokens::get(ui.ctx());
     let bands = lightcraft_develop::MIXER_BANDS;
     let sel = bands.iter().position(|b| *b == app.ui.mixer_mode).unwrap_or(0);

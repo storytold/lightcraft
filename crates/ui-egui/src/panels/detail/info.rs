@@ -1,7 +1,7 @@
 use super::geometry::focus_box;
 use super::{Color32, LightcraftApp, PhotoId, Pos2, Rect, Sense, Stroke, Tokens, json, pos2, register, register_geometry, vec2};
 
-/// Draw the camera's focus box over a photo drawn in `img` (View ▸ Focus Point): green corner
+/// Draw the camera's focus box over a photo drawn in `img` (View ▸ Loupe Overlay ▸ Focus Point): green corner
 /// brackets with a dark keyline, the way cameras show their AF frame, never smaller than 14 pt.
 /// `key` names it for tests and the control channel (`canvas:focusPoint`, `compare:focusPoint:<id>`).
 pub(crate) fn draw_focus_point(p: &egui::Painter, img: Rect, photo: &lightcraft_catalog::Photo, key: &str) {
@@ -96,11 +96,22 @@ pub(super) fn info_overlay_extent(app: &LightcraftApp, p: &egui::Painter, photo:
 }
 
 /// Where the info overlay's text starts below the canvas' top: the full-screen preview has no top
-/// bar, so on macOS it starts below the window controls that sit over the photo there (#2460).
+/// bar, so on macOS it starts below the window controls that sit over the photo there (#2460); in
+/// the loupe it starts below the filter pill when a filter is active (#3837), as the Before label
+/// does.
 fn info_overlay_top(app: &LightcraftApp, t: &Tokens) -> f32 {
     let controls = app.ui.fullscreen && app.integrated_titlebar && !app.window_is_fullscreen;
-    if controls { t.top_bar_h } else { INFO_OVERLAY_TOP }
+    if controls {
+        t.top_bar_h
+    } else if !app.ui.fullscreen && filter_pill_shown(app) {
+        FILTER_PILL_INSET + FILTER_PILL_HEIGHT + INFO_OVERLAY_BELOW_PILL
+    } else {
+        INFO_OVERLAY_TOP
+    }
 }
+
+/// The gap between the filter pill and the info overlay's first line under it.
+const INFO_OVERLAY_BELOW_PILL: f32 = 6.0;
 
 /// The info overlay's lines for `photo`, or `None` when it is off.
 fn info_overlay_lines(app: &LightcraftApp, photo: &lightcraft_catalog::Photo) -> Option<Vec<String>> {
@@ -199,6 +210,24 @@ pub(super) fn filter_pill(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Re
     if resp.on_hover_text(crate::i18n::tr("Click to clear these filters")).clicked() {
         let _ = app.run("library.clearFilter", json!({}));
     }
+}
+
+/// A small "Camera preview" label at the top right of the photo while the loupe shows the camera's
+/// embedded JPEG (widget `loupe:cameraPreview`), with what that means on hover.
+pub(super) fn camera_preview_badge(ui: &egui::Ui, canvas: Rect, over: Rect) {
+    let t = Tokens::get(ui.ctx());
+    let p = ui.painter_at(canvas);
+    let text = crate::i18n::tr("Camera preview");
+    let g = p.layout_no_wrap(text.to_string(), t.font(11.5), Color32::from_gray(225));
+    let size = vec2(g.size().x + 16.0, 18.0);
+    let over = if over.is_positive() { over } else { canvas };
+    let r = Rect::from_min_size(pos2(over.right() - size.x - 8.0, over.top() + 8.0), size);
+    p.rect_filled(r, 9.0, Color32::from_black_alpha(165));
+    p.galley(pos2(r.left() + 8.0, r.center().y - g.size().y / 2.0), g, Color32::from_gray(225));
+    register(ui, "loupe:cameraPreview", r);
+    let tip = crate::i18n::tr("The camera's own JPEG, shown until LightCraft has rendered the raw. Judge colour and tone on the rendered photo.");
+    let resp = ui.interact(r, egui::Id::unique("camera-preview-badge"), Sense::hover()).on_hover_text(tip);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, format!("{text}: {tip}")));
 }
 
 /// A raw shown from its embedded JPEG (issue #10): a pill at the canvas' top centre saying so;
@@ -446,7 +475,7 @@ mod info_overlay_tests {
         lines
     }
 
-    /// View ▸ View Options: Info 1 and Info 2 each show the three lines chosen for them, in that
+    /// View ▸ Loupe Overlay ▸ View Options…: Info 1 and Info 2 each show the three lines chosen for them, in that
     /// order, without the lines set to None.
     #[test]
     fn the_info_overlay_shows_the_lines_chosen_in_view_options() {
@@ -513,6 +542,38 @@ mod info_overlay_tests {
         app.window_is_fullscreen = false;
         app.ui.fullscreen = false;
         assert_eq!(name_top(&app, &photo), 12.0, "the loupe's canvas starts below the top bar");
+    }
+
+    /// #3837: with a filter active, the file name starts below the loupe's filter pill instead of
+    /// under it, and a label placed below the overlay clears both; the full-screen preview, which
+    /// has no pill, keeps the usual top.
+    #[test]
+    fn the_file_name_starts_below_the_filter_pill() {
+        let (mut app, photo) = demo_app();
+        assert_eq!(name_top(&app, &photo), INFO_OVERLAY_TOP, "no filter, no pill");
+        app.session.execute("library.filter", &serde_json::json!({"text": "x"})).unwrap();
+        assert!(filter_pill_shown(&app), "the search shows the pill");
+        let top = name_top(&app, &photo);
+        assert!(top >= FILTER_PILL_INSET + FILTER_PILL_HEIGHT, "the name starts below the pill: {top}");
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        let raw = crate::headless::HeadlessView::raw_input(vec2(1000.0, 700.0), 1.0, 0.0, vec![]);
+        let mut extent = 0.0;
+        ctx.run_ui(raw, |ui| extent = info_overlay_extent(&app, ui.painter(), &photo)).textures_delta.clear();
+        let (texts, _) = paint_overlay(&app, &photo);
+        let bottom = texts.iter().map(|t| t.pos.y + t.galley.size().y).fold(0.0, f32::max);
+        assert!(extent >= bottom, "the extent follows the overlay down: {extent} < {bottom}");
+        // with badges under the text, a label below the overlay clears them too
+        let mut rated = photo.clone();
+        rated.rating = 3;
+        let (_, rects) = paint_overlay(&app, &rated);
+        let badges = rects.into_iter().find(|(id, _)| id == "canvas:infoOverlayBadges").map(|(_, r)| r).expect("three stars");
+        let mut extent = 0.0;
+        let raw = crate::headless::HeadlessView::raw_input(vec2(1000.0, 700.0), 1.0, 0.0, vec![]);
+        ctx.run_ui(raw, |ui| extent = info_overlay_extent(&app, ui.painter(), &rated)).textures_delta.clear();
+        assert!(extent >= badges.bottom(), "the extent clears the moved badges: {extent} < {badges:?}");
+        app.ui.fullscreen = true;
+        assert_eq!(name_top(&app, &photo), INFO_OVERLAY_TOP, "the full-screen preview has no pill");
     }
 
     /// #2460: a rated or flagged photo shows its stars and flag under the date and size.

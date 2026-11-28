@@ -9,7 +9,7 @@ other tools), and let LightCraft pick up edits made elsewhere.
 | | |
 |---|---|
 | Name | `<stem>.xmp` by default (`IMG_0001.CR3` → `IMG_0001.xmp`); `<file>.xmp` (`IMG_0001.CR3.xmp`) with `naming: "full"`. Reading accepts either (preferred first) and `.XMP`. With stem naming, files sharing a stem don't share a sidecar: see *Shared names* below. |
-| Write | `photo.saveMetadataToFile {ids?}` (Photo ▸ Save Metadata to File, ⌘S), or automatically after every change with `library.xmpPreferences {autoWrite: true}` (File ▸ Automatically Write Changes into XMP). Slider drags are written once, when the drag ends; undo/redo rewrite the sidecar. An existing sidecar is **merged into, never replaced** (see *Saving into an existing sidecar*). Written atomically (temp file, fsync, rename). The result lists `written`, `merged` and `backups`. |
+| Write | `photo.saveMetadataToFile {ids?}` (Photo ▸ Metadata ▸ Save Metadata to File, ⌘S), or automatically after every change with `library.xmpPreferences {autoWrite: true}` (File ▸ Automatically Write Changes into XMP). Slider drags are written once, when the drag ends; undo/redo rewrite the sidecar. An existing sidecar is **merged into, never replaced** (see *Saving into an existing sidecar*). Written atomically (temp file, fsync, rename). The result lists `written`, `merged` and `backups`. |
 | Read | On import (`library.import`, the report counts `sidecars`), and `photo.readMetadataFromFile {ids?}` (one undo step). Manual rereading uses embedded XMP in raw/DNG and JPEG files when no sidecar exists. A discovered sidecar that cannot be read or parsed is reported in `failed`, without applying embedded values. `photo.readMetadataFromFile` never writes the sidecar, even with auto-write on: writing back what it has just read would add `lc:settings`, which later reads prefer over another app's `crs:` edits (issue #934). A file arriving in an import is ranked as if it were catalogued already: it reads its own `<file>.xmp` when another file of its stem (a raw first) owns the shared stem sidecar (issue #1905). |
 | Preferences | `library.xmpPreferences {autoWrite?, naming?: stem\|full}`, stored in the library's `prefs.json`. |
 
@@ -126,8 +126,15 @@ write them, from sidecars and from XMP embedded in the file. Named faces become 
   that misses it entirely, or has a non-finite, zero or negative size, is skipped (the rest of the list is kept).
 - **Orientation**: regions are stored on the upright (EXIF-oriented) photo. A `mwg-rs:Rotation` of −π/2, +π/2 or ±π
   (how Lightroom marks a box given in the sensor's frame for Exif orientation 6, 8 or 3) is turned back into the
-  upright frame; MWG can't say "mirrored", so boxes on mirrored photos (orientations 2, 4, 5, 7) are taken as written.
-  Boxes follow LightCraft's own Rotate Left/Right and flips.
+  upright frame; MWG can't say "mirrored", so Lightroom's boxes on mirrored photos (orientations 2, 4, 5, 7) are
+  taken as written. Other applications mark boxes drawn on the photo as stored only by their size: when
+  `mwg-rs:AppliedToDimensions` has the shape of the photo as stored rather than upright (a photo that Exif orientation
+  5–8 turns a quarter turn, and no `mwg-rs:Rotation`), the boxes are turned with the file's own Exif orientation,
+  mirror included, when imported and when read again (#2674). The image's own pixel size decides, not a size the
+  metadata states, and the orientation is found wherever the file keeps its Exif (WebP after the image data, for
+  one). The exception is a raw with a sidecar that has no `mwg-rs:Regions`: its boxes come from the file and the size
+  its Exif states decides, and with no such size they are taken as written. A square photo or size looks the same both
+  ways and is taken as written. Boxes follow LightCraft's own Rotate Left/Right and flips.
 - **Re-reading**: a sidecar that has `mwg-rs:Regions` — even with an empty list — replaces the photo's regions, so
   regions removed in another application go away here too. A sidecar without `mwg-rs:Regions` (an application that
   doesn't do regions) leaves the photo's regions as they are.
@@ -315,5 +322,20 @@ with a blend mode other than Normal or with a mask are reported, not applied. Bi
 or `.zip` bundles — as creative profiles: they appear in the profile browser under their folder's (or zip's) name and
 take the Amount slider (0–200 %) like the built-in looks. The LUT is applied to the finished, display-encoded colour
 (trilinear; `DOMAIN_MIN` / `DOMAIN_MAX` honoured; 1D LUTs are not supported); photos with a LUT profile render on the
-CPU. A library on disk keeps a copy of each file in its `Profiles/` folder. Adobe's own profile formats (`.dcp`, XMP
-camera/creative profiles with embedded tables) are deliberately not read.
+CPU. A library on disk keeps a copy of each file in its `Profiles/` folder. XMP camera/creative profiles with embedded
+tables are not read.
+
+## Profiles: camera profiles (`.dcp`)
+
+The same command (and File ▸ Import Profiles & Presets…, drag & drop) reads DNG Camera Profiles — the user's own `.dcp`
+files, e.g. made with a colour-checker tool — as camera profiles (`dcp:<camera>-<file>` ids, group *Camera Profiles*,
+listed by `profiles.camera`). Read per DNG specification chapter 6 (`crates/raw/src/dcp.rs`): `ProfileName`,
+`UniqueCameraModel`, `CalibrationIlluminant1/2`, `ColorMatrix1/2`, `ForwardMatrix1/2`, `ProfileHueSatMap*`,
+`ProfileLookTable*`, `ProfileToneCurve` and `BaselineExposureOffset`. Choosing one (`develop.profile {id}`) replaces a raw
+file's colour model when it is decoded — the file's own white balance, analog balance and baseline exposure stay, and a
+profile without a `ProfileToneCurve` (most chart-made ones) keeps the photo's own contrast: the DNG's tone curve, else the
+tone of the look fitted to its camera JPEG — so the
+photo's source is decoded again when its profile changes; rendered (non-raw) photos ignore it. Smart previews and the
+web build's render worker keep the file's own colour. A library on disk keeps a copy of each file in `Profiles/`;
+`profile.deleteCamera` (or `profile.deleteImported`) removes one. No profile ships with LightCraft, and the repository
+holds none: tests build theirs in memory (`lightcraft_raw::dcp::write_dcp`).

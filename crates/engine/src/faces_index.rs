@@ -11,7 +11,7 @@
 //! face, so every face is shown equally close however loosely or tightly its own region was drawn (a Lightroom box, an
 //! older tool's box), else the region's own box.
 //!
-//! Layout (little-endian): `"LCFE"`, version `2`, tag length `u16`, the tag (`<model id>@<sha256>`), dimension `u32`,
+//! Layout (little-endian): `"LCFE"`, version `3`, tag length `u16`, the tag (`<model id>@<sha256>`), dimension `u32`,
 //! then records of `photo u64`, four `i32` (the region's box in ten-thousandths), four `i32` (the view box likewise), and
 //! `dim` `f32`.
 
@@ -23,7 +23,9 @@ use std::sync::Arc;
 use lightcraft_geom::Rect;
 
 const MAGIC: &[u8; 4] = b"LCFE";
-const VERSION: u8 = 2;
+/// 3: each face averaged with its mirror image ([`lightcraft_faces::runtime::Embedder::embed_faces`]). A file of an
+/// older version is not read, so its faces are embedded again rather than mixed with the new ones.
+const VERSION: u8 = 3;
 /// Largest cache file we read.
 const MAX_FILE: u64 = 1 << 30;
 
@@ -214,9 +216,9 @@ impl Index {
             for (k, e) in &self.entries {
                 buf.extend(self.record(k, e));
             }
-            let part = path.with_extension("part");
-            std::fs::write(&part, &buf)?;
-            std::fs::rename(&part, &path)?;
+            // a fresh temp file (never a `.part` entry left in the library, which could be a link
+            // to a file outside it) renamed over the cache
+            lightcraft_catalog::safe_file::write_atomic_nosync(&path, &buf)?;
             self.file_matches = true;
             self.rewrite = false;
         }
@@ -367,9 +369,9 @@ impl Scanned {
         } else {
             let mut buf = self.header();
             buf.extend(self.set.iter().flat_map(|id| id.to_le_bytes()));
-            let part = path.with_extension("part");
-            std::fs::write(&part, &buf)?;
-            std::fs::rename(&part, &path)?;
+            // a fresh temp file (never a `.part` entry left in the library, which could be a link
+            // to a file outside it) renamed over the cache
+            lightcraft_catalog::safe_file::write_atomic_nosync(&path, &buf)?;
             self.file_matches = true;
             self.rewrite = false;
         }

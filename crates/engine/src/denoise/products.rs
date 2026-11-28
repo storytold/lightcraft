@@ -1,3 +1,4 @@
+use super::builtin::{BuiltinModel, builtin_marker};
 use super::model::{Loader, Model, ModelSlot, RunOn, STACK};
 use super::settings::EXT;
 use super::{
@@ -133,6 +134,9 @@ impl Progress {
 
 /// The loaded model, loading it first when it is not (kept for the next photo).
 pub(super) fn loaded(spec: &JobSpec) -> Result<Arc<dyn Model>, MakeError> {
+    if spec.manifest.id == lightcraft_denoise::builtin::ID {
+        return Ok(Arc::new(BuiltinModel::new(&builtin_marker(&spec.onnx))));
+    }
     if let Some(m) = spec.model.lock().unwrap_or_else(PoisonError::into_inner).clone() {
         return Ok(m);
     }
@@ -196,6 +200,10 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
     let (_, budget) = crate::memory::work_gate().usage();
     let parallel = spec.parallel.clamp(1, 4).min((budget / scratch.max(1)).max(1));
     let _held = crate::memory::work_gate().acquire(mosaic.data.len().saturating_mul(20).saturating_add(scratch.saturating_mul(parallel)));
+    model.prepare(&mosaic.data, mosaic.width, mosaic.height);
+    if cancelled() {
+        return Err(MakeError::Cancelled);
+    }
     let (runner, parallel) = model.runner(spec.run_on, parallel);
     let params = Params {
         tile: spec.manifest.tile as usize,

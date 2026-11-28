@@ -1,42 +1,237 @@
-//! Lens profile corrections from a lens database the user supplies ([`lightcraft_lensdb`]).
+//! Lens profile corrections from a lens database ([`lightcraft_lensdb`]).
 //!
 //! When a raw carries no lens correction of its own (DNG opcodes, or a camera correction a raw reader converts,
-//! [`crate::files::embedded_lens`]), the lens named in its EXIF is looked up in a lensfun-format database: the
-//! directory in `LIGHTCRAFT_LENSFUN_DIR` (e.g. lensfun's `data/db`, CC-BY-SA, which is never bundled with the app).
-//! The profile is converted to the same [`lightcraft_develop::EmbeddedLens`] form, so "Enable Profile Corrections", its
-//! amount sliders, the GPU path and DNG export treat both alike. Without the variable nothing changes.
-use std::path::PathBuf;
-use std::sync::OnceLock;
+//! [`crate::files::embedded_lens`]), the lens named in its EXIF is looked up in a lensfun-format database. The
+//! database is lensfun's `data/db` (CC BY-SA 3.0): never bundled with the app, it is downloaded at run time into the
+//! app's data folder ([`crate::lensfun_download`], which the desktop app offers on its first launch and Settings can start), or it is the
+//! directory in `LIGHTCRAFT_LENSFUN_DIR` (which wins). The profile is converted to the same
+//! [`lightcraft_develop::EmbeddedLens`] form (marked [`LensSource::Database`]), so "Enable Profile Corrections", its
+//! amount sliders, the GPU path and DNG export treat both alike. Without a database nothing changes.
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, PoisonError, RwLock};
 
-use lightcraft_develop::EmbeddedLens;
+use lightcraft_develop::{EmbeddedLens, LensSource};
 use lightcraft_lensdb::{LensDb, Shot};
 
 /// The environment variable naming the lens database directory.
 pub const ENV: &str = "LIGHTCRAFT_LENSFUN_DIR";
 
-/// The configured database, read once per process; `None` when none is configured or it holds no lenses.
-pub fn database() -> Option<&'static LensDb> {
-    static DB: OnceLock<Option<LensDb>> = OnceLock::new();
-    DB.get_or_init(|| {
-        let dir = PathBuf::from(std::env::var_os(ENV)?);
-        match LensDb::load_dir(&dir) {
-            Ok((db, errors)) => {
-                for (file, e) in errors {
-                    log::warn!("lens database: skipped {file}: {e}");
-                }
-                (!db.lenses.is_empty()).then_some(db)
+/// The database folder a host set up ([`use_dir`]), read when `LIGHTCRAFT_LENSFUN_DIR` is not set.
+static HOST_DIR: RwLock<Option<PathBuf>> = RwLock::new(None);
+/// The loaded database and the folder it was read from (`None` inside: nothing usable there).
+static LOADED: RwLock<Option<(PathBuf, Option<Arc<LensDb>>)>> = RwLock::new(None);
+/// Bumped whenever the database in use changes ([`reload`]): photos looked up before may now find a profile.
+static GENERATION: AtomicU64 = AtomicU64::new(0);
+/// Bumped when the database's files were replaced ([`replaced`]): profiles found before may now be different.
+static REPLACED: AtomicU64 = AtomicU64::new(0);
+
+/// Use `dir` (the app's downloaded lensfun data, [`crate::lensfun_download::default_dir`]) when
+/// `LIGHTCRAFT_LENSFUN_DIR` is not set. Hosts with a file system call it; tests and sessions that don't stay
+/// without a database.
+pub fn use_dir(dir: Option<PathBuf>) {
+    *HOST_DIR.write().unwrap_or_else(PoisonError::into_inner) = dir;
+    reload();
+}
+
+/// The database's files were replaced (a download put a new database in place): read it again, and photos whose
+/// profile came from the old one are looked up again too ([`replacements`]).
+pub fn replaced() {
+    REPLACED.fetch_add(1, Ordering::Relaxed);
+    reload();
+}
+
+/// Changes whenever the database's files were replaced ([`replaced`]); selecting a folder ([`use_dir`]) or reading
+/// it again doesn't change it, so photos with a profile are not read again at every start.
+pub fn replacements() -> u64 {
+    REPLACED.load(Ordering::Relaxed)
+}
+
+/// The folder the host selected ([`use_dir`]), whatever `LIGHTCRAFT_LENSFUN_DIR` says.
+pub fn host_dir() -> Option<PathBuf> {
+    HOST_DIR.read().unwrap_or_else(PoisonError::into_inner).clone()
+}
+
+/// Read the database again (after a download or an update): the next lookup sees the new data.
+pub fn reload() {
+    // under the cache lock, so a load of the old files that finishes meanwhile can't be published ([`database`])
+    let mut loaded = LOADED.write().unwrap_or_else(PoisonError::into_inner);
+    *loaded = None;
+    GENERATION.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Changes whenever the database in use may have changed.
+pub fn generation() -> u64 {
+    GENERATION.load(Ordering::Relaxed)
+}
+
+/// The folder the database is read from: `LIGHTCRAFT_LENSFUN_DIR`, else the host's ([`use_dir`]).
+pub fn dir() -> Option<PathBuf> {
+    source().map(|(d, _)| d)
+}
+
+/// [`dir`], and whether it is the app's own downloaded folder (read only when whole, [`crate::lensfun_download::complete`])
+/// rather than the user's.
+fn source() -> Option<(PathBuf, bool)> {
+    match std::env::var_os(ENV).filter(|v| !v.is_empty()) {
+        Some(d) => Some((PathBuf::from(d), false)),
+        None => HOST_DIR.read().unwrap_or_else(PoisonError::into_inner).clone().map(|d| (d, true)),
+    }
+}
+
+/// The database in use, read once per folder (and again after [`reload`]); `None` when none is configured, the
+/// folder is missing or it holds no lenses.
+pub fn database() -> Option<Arc<LensDb>> {
+    let (dir, downloaded) = source()?;
+    if let Some((d, db)) = LOADED.read().unwrap_or_else(PoisonError::into_inner).as_ref()
+        && *d == dir
+    {
+        return db.clone();
+    }
+    let generation = generation();
+    // the app's own folder without its marker is a download that never finished: not read (the start fetches it)
+    let db = if downloaded && !crate::lensfun_download::complete(&dir) {
+        // info, not a warning: before the first download this is every user's state (logged once per reload)
+        log::info!("lens database: no finished download in {} yet; lens profiles are not applied", dir.display());
+        None
+    } else {
+        load(&dir, downloaded)
+    };
+    let mut loaded = LOADED.write().unwrap_or_else(PoisonError::into_inner);
+    // a reload while the files were read: they may be the old ones, so they aren't kept (the next call reads again)
+    if GENERATION.load(Ordering::Relaxed) == generation {
+        *loaded = Some((dir, db.clone()));
+    }
+    db
+}
+
+fn load(dir: &Path, downloaded: bool) -> Option<Arc<LensDb>> {
+    let whose = if downloaded { "downloaded" } else { ENV };
+    if !dir.is_dir() {
+        log::warn!("lens database: {} ({whose}) is missing or not a folder", dir.display());
+        return None;
+    }
+    match LensDb::load_dir(dir) {
+        Ok((db, errors)) => {
+            let n_files = std::fs::read_dir(dir)
+                .map(|rd| {
+                    rd.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("xml"))).count()
+                })
+                .unwrap_or(0);
+            log::info!("lens database: {files} files, {profiles} profiles", files = n_files, profiles = db.lenses.len());
+            for (file, e) in errors {
+                log::warn!("lens database: skipped {file}: {e}");
             }
-            Err(e) => {
-                log::warn!("{e}");
-                None
+            let (level, line) = summary(dir, whose, &db);
+            log::log!(level, "{line}");
+            (!db.lenses.is_empty()).then(|| Arc::new(db))
+        }
+        Err(e) => {
+            log::warn!("{e}");
+            None
+        }
+    }
+}
+
+/// The log line for a database read from `dir`: where it is and how many lenses and cameras it has, so a user
+/// setting up `LIGHTCRAFT_LENSFUN_DIR` can see whether it was found; a folder without lenses is a warning.
+fn summary(dir: &Path, whose: &str, db: &LensDb) -> (log::Level, String) {
+    let (lenses, cameras) = (db.lenses.len(), db.cameras.len());
+    if lenses == 0 {
+        (
+            log::Level::Warn,
+            format!("lens database: no lenses in {} ({whose}): lenses 0, cameras {cameras}; lens profiles are not applied", dir.display()),
+        )
+    } else {
+        (log::Level::Info, format!("lens database: read {} ({whose}): lenses {lenses}, cameras {cameras}", dir.display()))
+    }
+}
+
+/// The database's name for the lens a photo's file calls `lens` (taken with `camera`, the make and model as the
+/// library shows them): "Canon EF 70-200mm f/2.8L IS II USM". `None` without a database or a match.
+pub fn profile_name(db: &LensDb, camera: &str, lens: &str) -> Option<String> {
+    let cam = camera.split_once(' ').and_then(|(make, model)| db.find_camera(make, model).or_else(|| db.find_camera(make, camera)));
+    let p = db.find_lens(None, lens, cam)?;
+    let model = p.models.first()?;
+    Some(if model.to_lowercase().starts_with(&p.maker.to_lowercase()) || p.maker.is_empty() { model.clone() } else { format!("{} {model}", p.maker) })
+}
+
+/// Identity of exactly the database this process uses, not files that may have changed since it
+/// was loaded. The loader bounds file count/size and sorts paths; vector order is significant
+/// because equally good matches use the first profile. No directory path or timestamps enter it.
+pub(crate) fn cache_key() -> u64 {
+    static KEY: RwLock<Option<(Arc<LensDb>, u64)>> = RwLock::new(None);
+    let Some(db) = database() else { return 0 };
+    let mut key = KEY.write().unwrap_or_else(PoisonError::into_inner);
+    if let Some((snapshot, value)) = key.as_ref()
+        && Arc::ptr_eq(snapshot, &db)
+    {
+        return *value;
+    }
+    let value = cache_key_for(Some(&db));
+    *key = Some((db, value));
+    value
+}
+
+fn cache_key_for(db: Option<&LensDb>) -> u64 {
+    use lightcraft_lensdb::{Distortion, Tca};
+    let Some(db) = db else { return 0 };
+    let mut h = lightcraft_preview::Hasher128::new();
+    h.str("lens-db-v2").u64(db.cameras.len() as u64);
+    for c in &db.cameras {
+        h.str(&c.maker).str(&c.model).str(&c.mount).u64(c.crop_factor.map(f64::to_bits).unwrap_or(0));
+    }
+    h.u64(db.lenses.len() as u64);
+    for p in &db.lenses {
+        h.str(&p.maker).u64(p.models.len() as u64);
+        for name in &p.models {
+            h.str(name);
+        }
+        h.u64(p.mounts.len() as u64);
+        for mount in &p.mounts {
+            h.str(mount);
+        }
+        h.u64(p.crop_factor.map(f64::to_bits).unwrap_or(0)).u64(p.aspect_ratio.to_bits()).u64(u64::from(p.rectilinear));
+        h.u64(p.distortion.len() as u64);
+        for (focal, model) in &p.distortion {
+            h.u64(focal.to_bits());
+            match *model {
+                Distortion::Poly3 { k1 } => {
+                    h.u64(0).u64(k1.to_bits());
+                }
+                Distortion::Poly5 { k1, k2 } => {
+                    h.u64(1).u64(k1.to_bits()).u64(k2.to_bits());
+                }
+                Distortion::PtLens { a, b, c } => {
+                    h.u64(2).u64(a.to_bits()).u64(b.to_bits()).u64(c.to_bits());
+                }
             }
         }
-    })
-    .as_ref()
+        h.u64(p.tca.len() as u64);
+        for (focal, model) in &p.tca {
+            h.u64(focal.to_bits());
+            match *model {
+                Tca::Linear { kr, kb } => {
+                    h.u64(0).u64(kr.to_bits()).u64(kb.to_bits());
+                }
+                Tca::Poly3 { vr, vb, cr, cb, br, bb } => {
+                    h.u64(1).u64(vr.to_bits()).u64(vb.to_bits()).u64(cr.to_bits()).u64(cb.to_bits()).u64(br.to_bits()).u64(bb.to_bits());
+                }
+            }
+        }
+        h.u64(p.vignetting.len() as u64);
+        for v in &p.vignetting {
+            h.u64(v.focal.to_bits()).u64(v.aperture.to_bits()).u64(v.distance.to_bits());
+            h.u64(v.model.k1.to_bits()).u64(v.model.k2.to_bits()).u64(v.model.k3.to_bits());
+        }
+    }
+    // Reserve zero for a process with no usable database.
+    (h.finish().0 as u64).max(1)
 }
 
 /// The database profile for a photo with metadata `m`, for its `w × h` (unoriented, default-cropped) image,
-/// re-expressed after `orientation`. `None` without a database, lens name, focal length or matching profile.
+/// re-expressed after `orientation`. Without a lens name/specification, a unique fixed-mount profile may identify it.
+/// `None` without a database, focal length or unambiguous matching profile.
 pub fn lookup(db: &LensDb, m: &lightcraft_meta::Metadata, w: f64, h: f64, orientation: lightcraft_geom::Orientation) -> Option<EmbeddedLens> {
     let focal = m.focal_length.filter(|f| f.is_finite() && *f > 0.0)?;
     let camera = db.find_camera(m.make.as_deref().unwrap_or_default(), m.model.as_deref().unwrap_or_default());
@@ -44,15 +239,32 @@ pub fn lookup(db: &LensDb, m: &lightcraft_meta::Metadata, w: f64, h: f64, orient
         Some(model) => db.find_lens(m.lens_make.as_deref(), model, camera)?,
         // Nikon DSLRs record only the lens specification ("24-70mm f/2.8"); a profile must be named exactly that
         // (a user's alias), since the specification fits other makers' lenses too
-        None => {
-            let name = lightcraft_lensdb::spec_name(m.lens_spec?);
-            db.find_lens_named(m.lens_make.as_deref(), &name, camera)?
-        }
+        None => match m.lens_spec {
+            Some(spec) => {
+                let name = lightcraft_lensdb::spec_name(spec);
+                db.find_lens_named(m.lens_make.as_deref(), &name, camera)?
+            }
+            None => {
+                let camera = camera?;
+                // Lensfun reserves lowercase initial mount names for fixed-lens cameras:
+                // https://lensfun.github.io/manual/latest/el_mount.html
+                // This is an exact identity, never interchangeable-mount compatibility.
+                if !camera.mount.chars().next().is_some_and(char::is_lowercase) {
+                    return None;
+                }
+                let mut profiles = db.lenses.iter().filter(|lens| lens.mounts.iter().any(|mount| mount == &camera.mount));
+                let profile = profiles.next()?;
+                if profiles.next().is_some() {
+                    return None;
+                }
+                profile
+            }
+        },
     };
-    let crop = frame_crop_factor(camera.map(|c| c.crop_factor), focal, m.focal_length_35mm);
+    let crop = frame_crop_factor(camera.and_then(|c| c.crop_factor), focal, m.focal_length_35mm);
     let shot = Shot { focal, aperture: m.f_number, distance: None, crop_factor: crop, width: w, height: h };
     let corr = lens.correction(&shot)?;
-    Some(lightcraft_pipeline::optics::reorient_lens(&corr, orientation, w, h))
+    Some(EmbeddedLens { source: LensSource::Database, ..lightcraft_pipeline::optics::reorient_lens(&corr, orientation, w, h) })
 }
 
 /// The crop factor of the recorded frame, which scales the profile's radii: the body's (`camera`), else what the
@@ -73,7 +285,7 @@ pub fn for_raw(raw: &lightcraft_raw::RawInfo, meta: impl FnOnce() -> lightcraft_
     crate::files::embedded_lens(raw).or_else(|| {
         let db = database()?;
         let (w, h) = raw.developed_size();
-        lookup(db, &meta(), w as f64, h as f64, raw.orientation)
+        lookup(&db, &meta(), w as f64, h as f64, raw.orientation)
     })
 }
 
@@ -91,6 +303,85 @@ mod tests {
         </calibration>
       </lens></lensdatabase>"#;
 
+    #[test]
+    fn public_cache_key_hashes_the_configured_database() {
+        const CHILD: &str = "LIGHTCRAFT_TEST_LENS_CACHE_KEY_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let dir = std::env::temp_dir().join(format!("lc-lens-key-wiring-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("lens.xml"), DB).unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "lens_profiles::tests::public_cache_key_hashes_the_configured_database", "--nocapture"])
+                .env(CHILD, "1")
+                .env(ENV, &dir)
+                .env("LIGHTCRAFT_CAMERA_PROFILES", &dir)
+                .env("LIGHTCRAFT_CONFIG_DIR", &dir)
+                .output()
+                .unwrap();
+            std::fs::remove_dir_all(&dir).unwrap();
+            assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+            return;
+        }
+        let loaded = database().expect("fixture database was loaded by the public loader");
+        assert_eq!(*loaded, LensDb::parse(DB).unwrap());
+        assert_ne!(cache_key(), 0, "configured nonempty database cannot use the no-database identity");
+        assert_eq!(cache_key(), cache_key_for(Some(&loaded)), "public lens key hashes the actual loaded snapshot");
+        let first = cache_key();
+        let file = PathBuf::from(std::env::var_os(ENV).unwrap()).join("lens.xml");
+        std::fs::write(&file, DB.replace("-0.03", "-0.05")).unwrap();
+        assert_eq!(cache_key(), first, "files alone do not mutate the loaded snapshot");
+        replaced();
+        let replacement = cache_key();
+        assert_ne!(replacement, first, "a runtime replacement invalidates the fitted look");
+        assert_eq!(cache_key_for(Some(&loaded)), first, "the previous snapshot stays immutable");
+        std::fs::write(&file, DB).unwrap();
+        reload();
+        assert_eq!(cache_key(), first, "identical semantic data restores the same identity");
+        std::fs::remove_file(&file).unwrap();
+        reload();
+        assert_eq!(cache_key(), 0, "removing the database restores the no-database identity");
+    }
+
+    #[test]
+    fn database_identity_tracks_loaded_geometry_not_xml_formatting() {
+        let db = LensDb::parse(DB).unwrap();
+        let key = cache_key_for(Some(&db));
+        assert_ne!(key, cache_key_for(None), "installing a database invalidates no-database fits");
+        assert_eq!(key, cache_key_for(Some(&LensDb::parse(&DB.replace("<camera>", "\n  <camera> ")).unwrap())));
+        let changed = LensDb::parse(&DB.replace("-0.03", "-0.05")).unwrap();
+        assert_ne!(key, cache_key_for(Some(&changed)), "equal-length calibration changes matter");
+        assert_eq!(key, cache_key_for(Some(&db)), "an already-loaded snapshot stays unchanged");
+        let mut changed = db.clone();
+        changed.cameras[0].mount = "other-fixed-mount".into();
+        assert_ne!(key, cache_key_for(Some(&changed)), "camera matching affects the fit too");
+        changed = db.clone();
+        changed.lenses[0].aspect_ratio = 2.0;
+        assert_ne!(key, cache_key_for(Some(&changed)), "calibration frame changes matter");
+        changed = db.clone();
+        changed.lenses[0].vignetting[0].model.k1 = -0.8;
+        assert_ne!(key, cache_key_for(Some(&changed)), "vignetting is a fit dependency");
+    }
+
+    #[test]
+    fn database_identity_uses_the_loaders_sorted_file_order() {
+        let dir = std::env::temp_dir().join(format!("lc-lens-identity-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let changed = DB.replace("-0.03", "-0.05");
+        std::fs::write(dir.join("b.xml"), &changed).unwrap();
+        std::fs::write(dir.join("a.xml"), DB).unwrap();
+        let first = LensDb::load_dir(&dir).unwrap().0;
+        std::fs::remove_file(dir.join("a.xml")).unwrap();
+        std::fs::remove_file(dir.join("b.xml")).unwrap();
+        std::fs::write(dir.join("a.xml"), DB).unwrap();
+        std::fs::write(dir.join("b.xml"), &changed).unwrap();
+        let second = LensDb::load_dir(&dir).unwrap().0;
+        assert_eq!(cache_key_for(Some(&first)), cache_key_for(Some(&second)), "directory enumeration order is irrelevant");
+        let mut reversed = first.clone();
+        reversed.lenses.reverse();
+        assert_ne!(cache_key_for(Some(&first)), cache_key_for(Some(&reversed)), "tie-breaking profile order matters");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     fn meta() -> lightcraft_meta::Metadata {
         lightcraft_meta::Metadata {
             make: Some("Testcam".into()),
@@ -102,11 +393,61 @@ mod tests {
         }
     }
 
+    /// The log says where the database was read from and what it holds, and warns when it holds no lenses (#2511).
+    #[test]
+    fn the_log_names_the_folder_and_what_it_holds() {
+        let dir = Path::new("/lensfun/db");
+        let (level, line) = summary(dir, ENV, &LensDb::parse(DB).unwrap());
+        assert_eq!(level, log::Level::Info);
+        assert!(line.contains("lenses 1, cameras 1") && line.contains("/lensfun/db") && line.contains(ENV), "{line}");
+        let (level, line) = summary(dir, "downloaded", &LensDb::parse("<lensdatabase></lensdatabase>").unwrap());
+        assert_eq!(level, log::Level::Warn);
+        assert!(line.contains("no lenses") && line.contains("downloaded") && line.contains("lenses 0, cameras"), "{line}");
+    }
+
+    #[test]
+    fn unnamed_fixed_lens_requires_unique_exact_lowercase_mount() {
+        let mut db = LensDb::parse(DB).unwrap();
+        db.cameras[0].mount = "compact-tc1".into();
+        db.lenses[0].mounts = vec!["compact-tc1".into()];
+        let unnamed = lightcraft_meta::Metadata { lens_model: None, lens_spec: None, ..meta() };
+        let at = |db: &LensDb, m: &lightcraft_meta::Metadata| lookup(db, m, 6000.0, 4000.0, Orientation::Normal);
+        let expected = at(&db, &meta()).unwrap();
+        assert_eq!(at(&db, &unnamed), Some(expected));
+        let mut changed = db.clone();
+        changed.lenses.push(changed.lenses[0].clone());
+        assert!(at(&changed, &unnamed).is_none(), "duplicate profiles are ambiguous");
+        assert_eq!(at(&changed, &meta()), Some(expected), "named route keeps existing behaviour");
+        changed = db.clone();
+        changed.lenses[0].mounts = vec!["Compact-tc1".into()];
+        assert!(at(&changed, &unnamed).is_none(), "mount identity is case sensitive");
+        changed.lenses[0].mounts = vec!["compact-other".into()];
+        assert!(at(&changed, &unnamed).is_none(), "another fixed mount is not compatible");
+        changed.lenses[0].mounts.clear();
+        assert!(at(&changed, &unnamed).is_none(), "missing mount is not an identity");
+        for mount in ["Interchangeable", "", "1fixed"] {
+            changed = db.clone();
+            changed.cameras[0].mount = mount.into();
+            changed.lenses[0].mounts = vec![mount.into()];
+            assert!(at(&changed, &unnamed).is_none(), "only lowercase initial fixed mounts qualify: {mount}");
+        }
+        changed = db.clone();
+        changed.cameras.clear();
+        assert!(at(&changed, &unnamed).is_none(), "no camera means no fixed mount");
+        let specified = lightcraft_meta::Metadata { lens_spec: Some([18.0, 55.0, 3.5, 5.6]), ..unnamed };
+        assert!(at(&db, &specified).is_none(), "unmatched specification does not fall back to a fixed mount");
+        let wrongly_named = lightcraft_meta::Metadata { lens_model: Some("Unknown 1000mm".into()), ..meta() };
+        assert!(at(&db, &wrongly_named).is_none(), "unmatched lens name does not fall back");
+    }
+
     #[test]
     fn exif_lens_is_found_and_converted() {
         let db = LensDb::parse(DB).unwrap();
         let lens = lookup(&db, &meta(), 6000.0, 4000.0, Orientation::Normal).unwrap();
         assert!(lens.warp.is_some() && lens.vignette.is_some());
+        assert_eq!(lens.source, LensSource::Database, "the Optics panel says where it came from");
+        assert_eq!(profile_name(&db, "Testcam TC-1", "18-55mm F3.5-5.6").as_deref(), Some("Testcam 18-55mm f/3.5-5.6"));
+        assert_eq!(profile_name(&db, "Testcam TC-1", "70-200mm F4"), None);
         let rotated = lookup(&db, &meta(), 6000.0, 4000.0, Orientation::Rotate90).unwrap();
         assert_eq!(rotated.warp.unwrap().center, lightcraft_geom::Point::new(0.5, 0.5));
         // no lens name, no focal length, an unknown lens: nothing
@@ -164,7 +505,7 @@ mod tests {
         };
         let at = |crop: f64, w: f64, h: f64| {
             let shot = Shot { focal: 70.0, aperture: Some(2.8), distance: None, crop_factor: Some(crop), width: w, height: h };
-            db.lenses[0].correction(&shot).unwrap()
+            EmbeddedLens { source: LensSource::Database, ..db.lenses[0].correction(&shot).unwrap() }
         };
         let aps_c = lookup(&db, &m(Some(105.0)), 5616.0, 3744.0, Orientation::Normal).unwrap();
         assert_eq!(aps_c, at(1.5, 5616.0, 3744.0));
@@ -175,6 +516,72 @@ mod tests {
         }
         assert_eq!(frame_crop_factor(None, 70.0, Some(105.0)), Some(1.5), "no body in the database: the 35 mm equivalent's");
         assert_eq!(frame_crop_factor(Some(1.0), 0.0, Some(105.0)), Some(1.0), "a hostile focal length is ignored");
+    }
+
+    #[test]
+    fn unknown_camera_crop_uses_exif_equivalent_without_full_frame_assumption() {
+        for crop in [
+            "",
+            "<cropfactor/>",
+            "<cropfactor>bad</cropfactor>",
+            "<cropfactor>NaN</cropfactor>",
+            "<cropfactor>inf</cropfactor>",
+            "<cropfactor>0.049</cropfactor>",
+            "<cropfactor>21</cropfactor>",
+        ] {
+            let xml = DB.replacen("<cropfactor>1.5</cropfactor>", crop, 1).replace("-0.03", "-0.003").replace("-0.4", "-0.04");
+            let db = LensDb::parse(&xml).unwrap();
+            // A below-1 crop exposes the old synthetic 1.0 body: the 10% crop-mode policy would keep it.
+            let m = lightcraft_meta::Metadata { focal_length_35mm: Some(17.1), ..meta() };
+            let expected = db.lenses[0]
+                .correction(&Shot { focal: 18.0, aperture: Some(3.5), distance: None, crop_factor: Some(17.1 / 18.0), width: 6000.0, height: 4000.0 })
+                .map(|lens| EmbeddedLens { source: LensSource::Database, ..lens })
+                .unwrap();
+            assert_eq!(lookup(&db, &m, 6000.0, 4000.0, Orientation::Normal).unwrap(), expected, "{crop}");
+            let fallback = db.lenses[0]
+                .correction(&Shot { focal: 18.0, aperture: Some(3.5), distance: None, crop_factor: None, width: 6000.0, height: 4000.0 })
+                .map(|lens| EmbeddedLens { source: LensSource::Database, ..lens })
+                .unwrap();
+            assert_eq!(lookup(&db, &meta(), 6000.0, 4000.0, Orientation::Normal).unwrap(), fallback, "no equivalent: {crop}");
+        }
+    }
+
+    /// The database that was found is reported: how many files it holds and how many profiles they carry, so a
+    /// directory that was pointed at but holds nothing (or holds profiles that never match a photo) is visible in
+    /// the log instead of passing unnoticed. The database is read from the environment and kept for the process,
+    /// so the check runs in a child process of this test binary.
+    #[test]
+    fn lens_database_summary_reports_files_and_profiles() {
+        let dir = std::env::temp_dir().join(format!("lc-lens-summary-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("one.xml"), DB).unwrap();
+        std::fs::write(dir.join("two.xml"), DB.replace("Testcam 18-55mm f/3.5-5.6", "Testcam 24-70mm f/2.8")).unwrap();
+        let exe = std::env::current_exe().unwrap();
+        let out = std::process::Command::new(exe)
+            .args(["--exact", "lens_profiles::tests::lens_database_summary_child", "--ignored", "--test-threads=1", "--nocapture"])
+            .env(ENV, &dir)
+            .env("LIGHTCRAFT_LOG", "trace")
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr).to_lowercase();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(out.status.success(), "the child process failed: {stderr}");
+        let logged: Vec<&str> = stderr.lines().filter(|l| l.starts_with("lightcraft: ")).collect();
+        assert!(!logged.is_empty(), "the database was read without a word in the log: {stderr}");
+        let summary = logged.iter().find(|l| l.contains("lens database:")).expect("the lens database summary line was not logged");
+        let mut counts = summary.split_whitespace().filter_map(|t| t.trim_end_matches(',').parse::<usize>().ok());
+        assert_eq!(counts.next(), Some(2), "expected 2 files in the lens database summary: {summary}");
+        assert_eq!(counts.next(), Some(2), "expected 2 profiles in the lens database summary: {summary}");
+    }
+
+    /// Run by [`lens_database_summary_reports_files_and_profiles`] in a child process: read the database the
+    /// environment points at, so its summary reaches the log the parent reads.
+    #[test]
+    #[ignore = "helper process for lens_database_summary_reports_files_and_profiles"]
+    fn lens_database_summary_child() {
+        crate::logging::install("lightcraft");
+        let _ = database();
     }
 
     /// A synthetic grid recorded through the profile's barrel distortion comes out of the pipeline's geometry

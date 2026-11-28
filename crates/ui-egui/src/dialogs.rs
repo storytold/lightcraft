@@ -25,8 +25,8 @@ use export::{
 };
 pub use frame::{ConfirmStyle, confirm_style, list_height, prompt};
 use frame::{
-    DIALOG_CHROME_GUESS, DIALOG_MIN_BODY, DIALOG_SCREEN_MARGIN, choices, clicked_backdrop, dialog_body, dialog_field, field, just_opened, num,
-    only_shows, return_confirms, trailing_button_row,
+    DIALOG_CHROME_GUESS, DIALOG_MIN_BODY, DIALOG_SCREEN_MARGIN, choice_combo, choice_grid, choice_menu, choices, clicked_backdrop, dialog_body,
+    dialog_field, field, just_opened, num, only_shows, return_confirms, trailing_button_row,
 };
 pub(crate) use rename::rename_preview;
 use rename::{RENAME_PREVIEW_ROWS, person_rename_plan};
@@ -51,6 +51,160 @@ pub const ABOUT_TABS: &[(&str, &str)] = &[("about", "About"), ("contributors", "
 
 /// Help ▸ What's New (docs/whats-new.md).
 pub const WHATS_NEW: &str = include_str!("../../../docs/whats-new.md");
+
+/// A line of What's New as the dialog shows it, in the UI language. The notes are written like the
+/// docs, with symbols Inter lacks (issue #1950): ▸ between menu items shows as → (as in the
+/// translations), the activity stack's ✕ as ×, and the sidebar's full-width ＋, which only the CJK
+/// faces have, as +.
+pub(crate) fn whats_new_line(source: &str) -> String {
+    crate::i18n::tr(source).replace('`', "").replace('▸', "→").replace('✕', "×").replace('＋', "+")
+}
+
+/// The tour's window title and the labels of its next and last-page buttons: translated in every
+/// catalog, with the pages' text (the test that pins it reads these).
+pub(crate) const WELCOME_TITLE: &str = "Welcome";
+pub(crate) const WELCOME_NEXT: &str = "Next";
+pub(crate) const WELCOME_START: &str = "Get Started";
+
+/// The first-run tour's pages: (title, what it does, where to find it). Every menu path names a
+/// real command (`file.addPhotos`, `view.photoGrid`, `view.detail`, `view.beforeAfter`,
+/// `dialog.cull`, `dialog.export`, `dialog.print`); `›` paints (the menu triangle `▸` does not).
+/// The pages that name a shortcut take the command's live binding at render time
+/// ([`welcome_body`]) — no key is written here, so no platform is shown a chord its menus do
+/// not bind.
+pub(crate) const WELCOME_PAGES: [(&str, &str, &str); 6] = [
+    (
+        "Welcome to LightCraft",
+        "A fast, non-destructive photo library and raw developer: your originals stay untouched, and every edit can be revisited or reset.",
+        "Bring photos in with File › Import Photos…",
+    ),
+    (
+        "Find and organize",
+        "The Photo Grid lays the library out as justified rows: rate, flag and colour-label, filter, and gather photos into albums.",
+        "View › Photo Grid.",
+    ),
+    (
+        "Develop a photo",
+        "Open a photo to develop it: exposure, colour, detail and masks, all non-destructive. Use View › Before/After Side by Side to compare before and after.",
+        "View › Detail View.",
+    ),
+    (
+        "Cull a shoot",
+        "Assisted Culling scores focus and exposure, finds bursts, and flags blurry shots as rejects, so the keepers surface fast.",
+        "Photo › Assisted Culling…",
+    ),
+    (
+        "Share your work",
+        "Export renders JPEG, PNG, TIFF, WebP and more, sized as you like; Print lays a photo out on a page as PDF.",
+        "File › Export… · File › Print…",
+    ),
+    (
+        "Put agents to work",
+        "Everything in LightCraft is a command, so AI agents can drive the running app over MCP: culling, editing, exporting on your word.",
+        "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.",
+    ),
+];
+
+/// The tour page that names the desktop-only launch flow: an MCP agent attaches over a `--control`
+/// port, which only the desktop app listens on. The browser build omits the page rather than
+/// telling browser users to launch a desktop binary.
+const WELCOME_DESKTOP_ONLY_PAGE: usize = 5;
+
+/// The tour's pages for `web_host` (the browser build) against the desktop's: the browser has no
+/// `--control` port for `lightcraft-cli` to attach to, so its tour omits [`WELCOME_DESKTOP_ONLY_PAGE`].
+/// The parameter is the pure decision; the running host passes [`welcome_pages_host`]'s answer.
+pub(crate) fn welcome_pages(web_host: bool) -> &'static [(&'static str, &'static str, &'static str)] {
+    if web_host { &WELCOME_PAGES[..WELCOME_DESKTOP_ONLY_PAGE] } else { &WELCOME_PAGES }
+}
+
+/// The pages this build's host shows: the web build (wasm32) hides the desktop-only page.
+fn welcome_pages_host() -> &'static [(&'static str, &'static str, &'static str)] {
+    welcome_pages(cfg!(target_arch = "wasm32"))
+}
+
+/// The command whose shortcut a tour page's opening line names.
+fn welcome_page_command(page: usize) -> Option<&'static str> {
+    match page {
+        0 => Some("file.addPhotos"),
+        2 => Some("view.detail"),
+        4 => Some("dialog.print"),
+        _ => None,
+    }
+}
+
+/// The tour page that names Print. The browser build's File menu disables Print
+/// ([`crate::menus::ui_enabled`]), so that host's tour names Export alone in the opening line
+/// ([`welcome_opening`]) instead of a menu item the host greys out.
+const WELCOME_PRINT_PAGE: usize = 4;
+
+/// The opening line a tour page paints under its text: the pages that name a shortcut carry the
+/// command's live binding (`keys`), the Share page names Export alone on the web host, and the
+/// rest paint the page's own sentence.
+pub(crate) fn welcome_opening(page: usize, opening: &str, keys: Option<&str>, web_host: bool) -> String {
+    match (page, keys, web_host) {
+        (WELCOME_PRINT_PAGE, _, true) => crate::i18n::tr("File › Export…").to_string(),
+        (0, Some(keys), _) => crate::i18n::tr_format!("Bring photos in with File › Import Photos… ({keys}).", keys = keys),
+        (2, Some(keys), _) => crate::i18n::tr_format!("View › Detail View ({keys}).", keys = keys),
+        (WELCOME_PRINT_PAGE, Some(keys), _) => crate::i18n::tr_format!("File › Export… · File › Print… ({keys}).", keys = keys),
+        _ => crate::i18n::tr(opening).to_string(),
+    }
+}
+
+/// The first-run tour: one page at a time, Back / Skip / Next under it. `close` is set when the
+/// tour is finished (Next on the last page) or skipped.
+fn welcome_body(app: &LightcraftApp, ui: &mut egui::Ui, t: &Tokens, page: &mut usize, close: &mut bool) {
+    let pages = welcome_pages_host();
+    let last = pages.len() - 1;
+    *page = (*page).min(last);
+    let (title, text, opening) = pages[*page];
+    ui.add_space(2.0);
+    ui.label(egui::RichText::new(crate::i18n::tr(title)).font(t.semibold(16.0)).color(t.text));
+    ui.label(egui::RichText::new(crate::i18n::tr(text)).color(t.text_label));
+    ui.add_space(2.0);
+    // The pages that name a shortcut show the command's live binding, painted the way the menus
+    // paint theirs (`menubar::shortcut_text`: `⌘⇧I` on macOS, `Ctrl+Shift+I` elsewhere) — never
+    // a hard-coded key. A command whose binding was removed shows the menu path alone.
+    let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
+    let keys = welcome_page_command(*page)
+        .and_then(|id| crate::shortcuts::shortcut_of(&app.ui.settings.keymap, id))
+        .map(|sc| crate::menus::menubar::shortcut_text(sc, mac));
+    let opening = welcome_opening(*page, opening, keys.as_deref(), cfg!(target_arch = "wasm32"));
+    ui.label(egui::RichText::new(opening).color(t.text_dim));
+    ui.add_space(8.0);
+    // progress dots, centred: the active page's is the accent
+    let spacing = 12.0;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 8.0), egui::Sense::hover());
+    let x0 = rect.center().x - spacing * (last as f32) / 2.0;
+    for i in 0..pages.len() {
+        let c = egui::pos2(x0 + i as f32 * spacing, rect.center().y);
+        ui.painter().circle_filled(c, if i == *page { 2.5 } else { 1.5 }, if i == *page { t.accent } else { t.text_dim });
+    }
+    ui.add_space(8.0);
+    use crate::button::{Button, Kind};
+    let back = Button::new(crate::i18n::tr("Back")).widget("button:welcomeBack").enabled(*page > 0).min_width(72.0);
+    let skip = Button::new(crate::i18n::tr("Skip")).kind(Kind::Ghost).widget("button:welcomeSkip").min_width(72.0);
+    let next_label = if *page == last { crate::i18n::tr(WELCOME_START) } else { crate::i18n::tr(WELCOME_NEXT) };
+    let next = Button::new(next_label).kind(Kind::Primary).widget("button:welcomeNext").min_width(84.0);
+    let gap = ui.spacing().item_spacing.x;
+    let row_w = ui.available_width().max(ui.min_rect().width()).max(1.0);
+    let (skip_w, next_w) = (skip.desired_size(ui).x, next.desired_size(ui).x);
+    ui.allocate_ui_with_layout(egui::vec2(row_w, next.desired_size(ui).y), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        if back.show(ui).clicked() {
+            *page -= 1;
+        }
+        ui.add_space((ui.available_width() - skip_w - next_w - 2.0 * gap).max(0.0));
+        if skip.show(ui).clicked() {
+            *close = true;
+        }
+        if next.show(ui).clicked() {
+            if *page == last {
+                *close = true;
+            } else {
+                *page += 1;
+            }
+        }
+    });
+}
 
 /// The import review and Settings keep window ids of their own, so the size each is given
 /// doesn't carry over to the other dialogs.
@@ -158,6 +312,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
             Dialog::FaceModel { .. } => 460.0,
             Dialog::LightroomCatalog { .. } => 440.0,
             Dialog::LightroomDestination { .. } => 480.0,
+            Dialog::Welcome { .. } => 460.0,
+            Dialog::LensDatabase { .. } => 440.0,
             Dialog::ManageEffects { .. } => 560.0,
             _ => 380.0,
         })
@@ -171,7 +327,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
             }
             ui.spacing_mut().item_spacing.y = 8.0;
             body_h = dialog_body(ui, (!import && !print).then_some(title.as_str()), body_max, |ui| {
-                dialog_content(app, ui, &t, body_max, &mut confirm, &mut dlg)
+                dialog_content(app, ui, &t, body_max, &mut confirm, &mut close, &mut dlg)
             });
             ui.add_space(4.0);
             // the confirm on the right with Cancel to its left (macOS and GNOME's order), filled with
@@ -216,6 +372,14 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
         if let Some(band) = title_bar {
             title_bar_handle(ctx, band, w.response.rect);
         }
+        // The startup dialog is recorded once it was presented, not when the logic tick picked
+        // it: a host that runs `logic` and quits before a visible frame does not burn the tour,
+        // and a crash while it is up still does not reopen it on every launch. A frame whose
+        // input a notice owns is not a presentation: the dialog is drawn but cannot be used, so
+        // the recording waits for a pass where the dialog actually takes input.
+        if !raw_blocked && matches!(at_start, Dialog::Welcome { .. } | Dialog::WhatsNew) {
+            app.ui.record_startup_dialog_seen();
+        }
     }
     // (while the shortcuts editor records a key, it takes Esc itself to cancel; an open popup in
     // the dialog, such as a date picker's calendar, takes it to close itself)
@@ -233,8 +397,10 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
         let frame = ctx.cumulative_frame_nr();
         ctx.data_mut(|d| d.insert_temp(egui::Id::unique(BACKDROP_SHOWN), frame));
     }
+    // a review closed without importing (Cancel, Esc) leaves no listing behind (OK took it already)
     if close && matches!(dlg, Dialog::Import { .. }) {
         app.renderer.forget_imports();
+        app.review_listed = None;
     }
     app.ui.dialog = if close { None } else { Some(dlg) };
 }
@@ -303,6 +469,7 @@ fn dialog_title(app: &LightcraftApp, dlg: &Dialog) -> String {
         Dialog::FaceModel { info, .. } if info["download"].is_string() => "Download Face Model",
         Dialog::FaceModel { .. } => "Add Face Model",
         Dialog::WhatsNew => "What's New",
+        Dialog::Welcome { .. } => WELCOME_TITLE,
         Dialog::Cull { .. } => "Assisted Culling",
         Dialog::SmartRules { id: None, .. } => "New Smart Album",
         Dialog::SmartRules { .. } => "Edit Smart Album",
@@ -320,6 +487,7 @@ fn dialog_title(app: &LightcraftApp, dlg: &Dialog) -> String {
         Dialog::MovePhotos { .. } => "Move Photos",
         Dialog::LightroomCatalog { .. } => "Lightroom Classic Catalog",
         Dialog::LightroomDestination { .. } => "Import Lightroom Catalog",
+        Dialog::LensDatabase { .. } => "Lens Profiles",
         Dialog::SaveEffect { .. } => "New Effect Preset",
         Dialog::ManageEffects { .. } => "Manage Effect Presets",
         Dialog::DeleteEffects { names } if names.len() == 1 => "Delete Effect Preset",
@@ -369,7 +537,7 @@ impl SamState {
 fn cancel_label(dlg: &Dialog, sam: &SamState) -> &'static str {
     match dlg {
         Dialog::SamModel { .. } if sam.running || sam.installed || sam.by_hand => "Close",
-        Dialog::SamModel { .. } => "Not Now",
+        Dialog::SamModel { .. } | Dialog::LensDatabase { .. } => "Not Now",
         Dialog::LightroomResult { .. } => "Close",
         _ => "Cancel",
     }
@@ -446,6 +614,8 @@ fn fixed_ok_label(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> &'s
         Dialog::RemoveFolder { .. } => "Remove",
         Dialog::LightroomCatalog { .. } => "Import Lightroom Catalog…",
         d @ Dialog::LightroomDestination { .. } => crate::lightroom_destination::ok_label(d),
+        Dialog::Welcome { .. } => "",
+        Dialog::LensDatabase { .. } => "Download",
         Dialog::SynchronizeFolder { .. } if informational => "Close",
         Dialog::SynchronizeFolder { .. } => "Synchronize",
         Dialog::RenamePerson { from, to, .. } if person_rename_plan(&app.session.catalog, from, to).needs_merge => "Merge",
@@ -554,7 +724,8 @@ fn confirmed(app: &mut LightcraftApp, ctx: &egui::Context, dlg: &mut Dialog) -> 
     match confirm_dialog(app, dlg) {
         // the import review stays open on an error (e.g. an unusable folder template), and so
         // does Export (e.g. no folder chosen) so the choices aren't lost, and Edit Capture Time
-        // (a time that isn't a date, or a shift it refuses)
+        // (a time that isn't a date, or a shift it refuses), and the lens database offer (a download that can't
+        // start: Download again or Not Now)
         Err(e)
             if matches!(
                 dlg,
@@ -571,6 +742,7 @@ fn confirmed(app: &mut LightcraftApp, ctx: &egui::Context, dlg: &mut Dialog) -> 
                     | Dialog::SynchronizeFolder { .. }
                     | Dialog::SaveEffect { .. }
                     | Dialog::CaptureTime { .. }
+                    | Dialog::LensDatabase { .. }
             ) =>
         {
             app.toast(ctx, e)
@@ -680,7 +852,7 @@ fn auto_stack_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: 
 
 /// The body of the Cull dialog.
 fn cull_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
-    let Dialog::Cull { reject_below, pick_best, burst_gap, similarity } = dlg else { return };
+    let Dialog::Cull { reject_below, pick_best, stack_groups, burst_gap, similarity, reset_bursts } = dlg else { return };
     let n = app.session.selection.ids.len();
     let scope = if n > 1 {
         crate::i18n::tr_format!("the {n} selected photos", n = n)
@@ -707,6 +879,8 @@ fn cull_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut D
     );
     let r = ui.checkbox(pick_best, crate::i18n::tr("Pick the sharpest photo of each burst"));
     crate::widgets::register(ui, "check:cullPick", r.rect);
+    let r = ui.checkbox(stack_groups, crate::i18n::tr("Stack each burst, best photo on top"));
+    crate::widgets::register(ui, "check:cullStack", r.rect);
     ui.add_space(6.0);
     // the sliders drag over the usual range; their value fields take whatever
     // `photo.analyze` accepts (a gap of 0 s to a day, a similarity of 0 to 1)
@@ -732,6 +906,14 @@ fn cull_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut D
     crate::widgets::register(ui, "field:cullSimilar", r.rect);
     clamp_cull_burst(burst_gap, similarity);
     ui.label(egui::RichText::new(crate::i18n::tr("Lower it when a panning or moving burst splits into several groups.")).color(t.text_dim));
+    let r = ui.checkbox(reset_bursts, crate::i18n::tr("Regroup bursts I arranged by hand"));
+    crate::widgets::register(ui, "check:cullResetBursts", r.rect);
+    ui.label(
+        egui::RichText::new(crate::i18n::tr(
+            "Put bursts right by dragging in Window → Bursts: the first photo of a burst is its pick, and culling again keeps what you arranged.",
+        ))
+        .color(t.text_dim),
+    );
     ui.label(
         egui::RichText::new(crate::i18n::tr("Scores stay on the photos: filter or make smart albums with Focus and Best of Similar Shots."))
             .color(t.text_dim),
@@ -746,15 +928,15 @@ fn whats_new_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
             let l = line.trim_end();
             if let Some(h) = l.strip_prefix("### ") {
                 ui.add_space(6.0);
-                ui.label(egui::RichText::new(crate::i18n::tr(h)).font(t.semibold(12.5)).color(t.text));
+                ui.label(egui::RichText::new(whats_new_line(h)).font(t.semibold(12.5)).color(t.text));
             } else if let Some(h) = l.strip_prefix("## ") {
                 ui.add_space(8.0);
-                ui.label(egui::RichText::new(crate::i18n::tr(h)).font(t.semibold(14.0)).color(t.text));
+                ui.label(egui::RichText::new(whats_new_line(h)).font(t.semibold(14.0)).color(t.text));
             } else if l.starts_with("# ") || l.is_empty() {
             } else if let Some(b) = l.strip_prefix("- ") {
-                ui.label(egui::RichText::new(format!("•  {}", crate::i18n::tr(b).replace('`', ""))).color(t.text_label));
+                ui.label(egui::RichText::new(format!("•  {}", whats_new_line(b))).color(t.text_label));
             } else {
-                ui.label(egui::RichText::new(crate::i18n::tr(l.trim()).replace('`', "")).color(t.text_label));
+                ui.label(egui::RichText::new(whats_new_line(l.trim())).color(t.text_label));
             }
         }
     });
@@ -835,7 +1017,8 @@ fn all_metadata_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
             egui::Grid::new(format!("meta-{g}")).num_columns(2).spacing([16.0, 3.0]).striped(true).show(ui, |ui| {
                 for (n, v) in list {
                     ui.label(egui::RichText::new(n).color(t.text_dim));
-                    ui.add(egui::Label::new(egui::RichText::new(v).color(t.text_label)).wrap());
+                    // values (serial numbers, lens names) are copied out of here; the field names are not
+                    ui.add(egui::Label::new(egui::RichText::new(v).color(t.text_label)).wrap().selectable(true));
                     ui.end_row();
                 }
             });
@@ -845,7 +1028,7 @@ fn all_metadata_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
 
 /// The body of the SmartRules dialog.
 fn smart_rules_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
-    let Dialog::SmartRules { id, name, rules, .. } = dlg else { return };
+    let Dialog::SmartRules { id, name, rules, instance, .. } = dlg else { return };
     let r = crate::widgets::named(
         ui.add(egui::TextEdit::singleline(name).hint_text(crate::i18n::tr("Name")).desired_width(f32::INFINITY)),
         crate::i18n::tr("Name"),
@@ -860,6 +1043,8 @@ fn smart_rules_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg:
     let now = (app.session.clock)();
     let view = app.caches.rules_view(&app.session.catalog, rules, *id, folder, &now);
     let env = crate::panels::rules_editor::Env { problems: view.problems.clone(), today: now, albums: view.albums.clone() };
+    // a drag that began in another dialog is not this one's, whatever its rules say
+    crate::panels::rules_reorder::bind(ui.ctx(), *instance);
     egui::ScrollArea::vertical().max_height(list_height(ui, 360.0)).auto_shrink([false, true]).show(ui, |ui| {
         crate::panels::rules_editor::edit(ui, rules, "rules", 0, &[], &env);
     });
@@ -1218,9 +1403,15 @@ fn contact_sheet_summary(n: usize, pages: usize) -> String {
     crate::i18n::tr_format!("{n} selected photo{} · {pages} page{}", crate::i18n::plural_s(n), crate::i18n::plural_s(pages), n = n, pages = pages)
 }
 
+/// The width of the Export dialog's options.
+const EXPORT_BODY_W: f32 = 581.0;
+
 /// The body of the Export dialog.
 fn export_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
     let Dialog::Export { opts, full_size, resize, preset_name, limit_kb, dir } = dlg else { return };
+    // as wide as when Format was a row of buttons: its dropdowns would leave the sliders, the
+    // watermark preview and the folder path narrow
+    ui.set_min_width(EXPORT_BODY_W);
     let n = app.session.selection.ids.len().max(1);
     ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} photo{}", if n == 1 { "" } else { "s" }, n = n)).color(t.text_dim));
     export_preset_row(app, ui, opts, full_size, resize, limit_kb);
@@ -1287,20 +1478,20 @@ fn export_format_rows(ui: &mut egui::Ui, t: &Tokens, opts: &mut ExportOptions) {
     let before = opts.format;
     // "Rendered DNG" is a DNG option (below), not a format of its own in this list
     let mut shown = if opts.format == F::RenderedDng { F::Dng } else { opts.format };
-    choices(
+    choice_menu(
         ui,
         "Format",
         "exportFormat",
         &[
-            (F::Jpeg, "JPEG"),
-            (F::Png, "PNG"),
-            (F::Tiff, "TIFF"),
-            (F::Psd, "PSD"),
-            (F::Webp, "WebP"),
-            (F::Avif, "AVIF"),
-            (F::Jxl, "JPEG XL"),
-            (F::Dng, "DNG"),
-            (F::Original, "Original files"),
+            (F::Jpeg, "JPEG", "jpeg"),
+            (F::Png, "PNG", "png"),
+            (F::Tiff, "TIFF", "tiff"),
+            (F::Psd, "PSD", "psd"),
+            (F::Webp, "WebP", "webp"),
+            (F::Avif, "AVIF", "avif"),
+            (F::Jxl, "JPEG XL", "jxl"),
+            (F::Dng, "DNG", "dng"),
+            (F::Original, "Original files", "original"),
         ],
         &mut shown,
     );
@@ -1365,11 +1556,17 @@ fn export_color_rows(ui: &mut egui::Ui, t: &Tokens, opts: &mut ExportOptions) {
         ui.label(egui::RichText::new(crate::i18n::tr("Color space: sRGB (AVIF)")).color(t.text_dim));
     } else {
         use lightcraft_engine::export::OutputSpace as C;
-        choices(
+        choice_combo(
             ui,
             "Color space",
             "exportColorSpace",
-            &[(C::Srgb, "sRGB"), (C::DisplayP3, "P3"), (C::AdobeRgb, "Adobe RGB"), (C::ProPhoto, "ProPhoto"), (C::Rec2020, "Rec.2020")],
+            &[
+                (C::Srgb, "sRGB", "srgb"),
+                (C::DisplayP3, "P3", "p3"),
+                (C::AdobeRgb, "Adobe RGB", "adobeRgb"),
+                (C::ProPhoto, "ProPhoto", "proPhoto"),
+                (C::Rec2020, "Rec.2020", "rec2020"),
+            ],
             &mut opts.color_space,
         );
         if opts.effective_space() != opts.color_space {
@@ -1409,21 +1606,22 @@ fn export_quality_rows(ui: &mut egui::Ui, opts: &mut ExportOptions, limit_kb: &m
 /// Export dialog: sharpening, metadata and the watermark of a rendered photo.
 fn export_output_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut ExportOptions, full_size: bool, resize: Resize) {
     use lightcraft_engine::export::{MetadataPolicy as M, SharpenAmount as A, SharpenFor as S};
-    choices(
+    choice_combo(
         ui,
         "Sharpen",
         "exportSharpen",
-        &[(S::None, "None"), (S::Screen, "Screen"), (S::Matte, "Matte"), (S::Glossy, "Glossy")],
+        &[(S::None, "None", "none"), (S::Screen, "Screen", "screen"), (S::Matte, "Matte", "matte"), (S::Glossy, "Glossy", "glossy")],
         &mut opts.sharpen,
     );
     if opts.sharpen != S::None {
-        choices(ui, "Amount", "exportSharpenAmount", &[(A::Low, "Low"), (A::Standard, "Standard"), (A::High, "High")], &mut opts.sharpen_amount);
+        let amounts = [(A::Low, "Low", "low"), (A::Standard, "Standard", "standard"), (A::High, "High", "high")];
+        choice_menu(ui, "Amount", "exportSharpenAmount", &amounts, &mut opts.sharpen_amount);
     }
-    choices(
+    choice_menu(
         ui,
         "Metadata",
         "exportMetadata",
-        &[(M::All, "All"), (M::AllExceptCamera, "No camera"), (M::Copyright, "Copyright"), (M::None, "None")],
+        &[(M::All, "All", "all"), (M::AllExceptCamera, "No camera", "noCamera"), (M::Copyright, "Copyright", "copyright"), (M::None, "None", "none")],
         &mut opts.metadata,
     );
     if !matches!(opts.metadata, M::None | M::Copyright) {
@@ -1492,7 +1690,7 @@ fn export_watermark(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut Expor
                 )
             });
         }
-        choices(ui, "Position", "exportWmAnchor", &WM_POSITIONS, &mut wm.anchor);
+        choice_grid(ui, "Position", "exportWmAnchor", &WM_POSITIONS, 3, &mut wm.anchor);
         choices(ui, "Rotate", "exportWmRotation", &[(0u16, "0°"), (90, "90°"), (180, "180°"), (270, "270°")], &mut wm.rotation);
         let mut size = wm.size as f64 * 100.0;
         if !graphic && num(ui, &WM_SIZE, &mut size) {
@@ -1601,11 +1799,33 @@ fn export_destination_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Token
             });
         });
     }
+    let subfolder_widget = "field:exportSubfolder";
+    let subfolder_id = crate::text_field::id(subfolder_widget);
     field(ui, "Subfolder", |ui| {
-        crate::widgets::named(
-            ui.add(egui::TextEdit::singleline(&mut opts.subfolder).hint_text(crate::i18n::tr("none")).desired_width(f32::INFINITY)),
-            crate::i18n::tr("Subfolder"),
-        )
+        trailing_button_row(ui, |ui| {
+            let mut chosen = None;
+            let c = crate::widgets::combo_box("exportSubfolderTags").width(90.0).selected_text(crate::i18n::tr("Insert…")).show_ui(ui, |ui| {
+                if ui.selectable_label(false, "{album}").on_hover_text(crate::i18n::tr("Album name (empty outside an album view)")).clicked() {
+                    chosen = Some("{album}");
+                }
+                if ui.selectable_label(false, "{date}").on_hover_text(crate::i18n::tr("Export date (YYYYMMDD)")).clicked() {
+                    chosen = Some("{date}");
+                }
+                if ui.selectable_label(false, "{hour}").on_hover_text(crate::i18n::tr("Export time (HHMM)")).clicked() {
+                    chosen = Some("{hour}");
+                }
+            });
+            crate::widgets::name_combo(&c.response, crate::i18n::tr("Insert variable"));
+            crate::widgets::register(ui, "combo:exportSubfolderTags", c.response.rect);
+            if let Some(tag) = chosen {
+                crate::import::insert_at_cursor(ui.ctx(), subfolder_id, &mut opts.subfolder, tag);
+            }
+            crate::text_field::TextField::singleline(subfolder_widget, &mut opts.subfolder)
+                .hint(crate::i18n::tr("none  ({album}, {date}, {hour})"))
+                .label(crate::i18n::tr("Subfolder"))
+                .width(ui.available_width())
+                .show(ui);
+        });
     });
     use lightcraft_engine::export::Conflict as K;
     choices(ui, "If file exists", "exportConflict", &[(K::Unique, "Add number"), (K::Overwrite, "Overwrite"), (K::Skip, "Skip")], &mut opts.conflict);
@@ -1712,7 +1932,7 @@ fn keyword_tag_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, conf
     ui.add_space(6.0);
     if editing.is_none() {
         if let Some(p) = parent {
-            let r = ui.checkbox(inside, crate::i18n::tr_format!("Put inside “{parent}”", parent = p.replace('|', " › ")));
+            let r = ui.checkbox(inside, crate::panels::keyword_list::put_inside_label(p));
             crate::widgets::register(ui, "check:keywordInside", r.rect);
         }
         let n = app.session.selection.ids.len();
@@ -1818,9 +2038,9 @@ fn delete_effects_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
 
 /// The body of the MovePhotos dialog.
 fn move_photos_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
-    let Dialog::MovePhotos { ids, name, dont_ask, .. } = dlg else { return };
-    let n = ids.len();
-    ui.label(crate::i18n::tr_format!("Move {n} photo{} to “{}”?", if n == 1 { "" } else { "s" }, name, n = n));
+    let Dialog::MovePhotos { name, files, dont_ask, .. } = dlg else { return };
+    let n = *files;
+    ui.label(crate::i18n::tr_format!("Move {n} file{} to “{}”?", if n == 1 { "" } else { "s" }, name, n = n));
     ui.label(egui::RichText::new(crate::i18n::tr("Their files and XMP sidecars move on disk. Edit → Undo moves them back.")).color(t.text_dim));
     ui.add_space(4.0);
     let c = ui.checkbox(dont_ask, crate::i18n::tr("Don't ask again"));
@@ -1863,7 +2083,7 @@ fn remove_folder_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
 /// The body of the About dialog.
 fn about_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
     let Dialog::About = dlg else { return };
-    ui.set_min_width(680.0);
+    ui.set_min_width(820.0);
     let tab_id = egui::Id::unique("about_tab");
     let mut tab = ui.data_mut(|d| d.get_temp::<u8>(tab_id)).unwrap_or(0);
     ui.horizontal(|ui| {
@@ -1880,8 +2100,16 @@ fn about_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut 
         1 => crate::credits::contributors_ui(app, ui),
         2 => crate::credits::models_ui(ui),
         _ => {
-            ui.label(egui::RichText::new("LightCraft").font(t.semibold(20.0)).color(t.text));
-            ui.label(crate::i18n::tr_format!("Version {} — a clean-room, pure-Rust photo library and raw developer.", env!("CARGO_PKG_VERSION")));
+            ui.label(egui::RichText::new(crate::channel::name()).font(t.semibold(20.0)).color(t.text));
+            ui.label(crate::i18n::tr_format!(
+                "Version {} — a clean-room, pure-Rust photo library and raw developer.",
+                crate::channel::display_version()
+            ));
+            // Nightly only: the exact source commit, so a report can name the build (plain text, as the
+            // catalogs carry no translated sentence for a build identity).
+            if let Some(commit) = crate::channel::commit() {
+                ui.label(format!("Nightly build {}", &commit[..commit.len().min(12)]));
+            }
             ui.label(crate::i18n::tr_format!(
                 "MIT OR Apache-2.0. Fonts: {} (OFL). Icons: original.",
                 crate::theme::font_credits(app.chinese_font.is_some())
@@ -1914,11 +2142,12 @@ fn about_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut 
 
 /// The body of the open dialog: what each kind of dialog shows between its title and its buttons. `confirm` is set
 /// by a dialog that is confirmed from its body (a text field's Return).
-fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_max: f32, confirm: &mut bool, dlg: &mut Dialog) {
+fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_max: f32, confirm: &mut bool, close: &mut bool, dlg: &mut Dialog) {
     match dlg {
         Dialog::AutoStack { .. } => auto_stack_body(app, ui, t, dlg),
         Dialog::Cull { .. } => cull_body(app, ui, t, dlg),
         Dialog::WhatsNew => whats_new_body(ui, t, dlg),
+        Dialog::Welcome { page } => welcome_body(app, ui, t, page, close),
         Dialog::DenoiseModel { info, accepted } => crate::panels::denoise::model_dialog(app, ui, t, info, accepted),
         Dialog::FaceModel { info, accepted, .. } => crate::panels::faces::model_dialog(app, ui, t, info, accepted),
         Dialog::LightroomResult { .. } => lightroom_result_body(ui, dlg),
@@ -1944,10 +2173,9 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
             }
         }
         Dialog::CreatePreset { name, group, groups } => {
-            crate::widgets::named(
-                ui.add(egui::TextEdit::singleline(name).hint_text(crate::i18n::tr("Preset name")).desired_width(f32::INFINITY)),
-                crate::i18n::tr("Preset name"),
-            );
+            if dialog_field(ui, "field:presetName", name, "Preset name") {
+                *confirm = true;
+            }
             crate::widgets::named(
                 ui.add(egui::TextEdit::singleline(group).hint_text(crate::i18n::tr("Group")).desired_width(f32::INFINITY)),
                 crate::i18n::tr("Group"),
@@ -1989,6 +2217,7 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
         d @ Dialog::SynchronizeFolder { .. } => crate::sync::body(app, ui, d),
         Dialog::LightroomCatalog { .. } => lightroom_catalog_body(app, ui, t, dlg),
         d @ Dialog::LightroomDestination { .. } => crate::lightroom_destination::body(app, ui, d),
+        Dialog::LensDatabase { .. } => crate::lens_db::offer(ui),
         Dialog::RemoveFolder { .. } => remove_folder_body(ui, t, dlg),
         Dialog::About => about_body(app, ui, t, dlg),
         Dialog::Shortcuts => crate::panels::keymap::body(app, ui, t),

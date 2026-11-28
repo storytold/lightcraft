@@ -99,6 +99,12 @@ fn search_field(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, sr: Rect
     if std::mem::take(&mut app.ui.focus_search) {
         ui.memory_mut(|m| m.request_focus(id));
     }
+    // The whole painted box is the field's, not the title bar's: the text field below fills only
+    // its middle, so without this a press on its padding (where a selection often starts) landed
+    // on the empty bar and, on macOS, moved the window (#2807). A click there focuses the field.
+    // `Sense::CLICK` and not `Sense::click()`: not focusable, so Tab still stops once, on the field,
+    // and screen readers get no second node beside it.
+    let bx = ui.interact(sr, id.with("box"), Sense::CLICK).on_hover_cursor(egui::CursorIcon::Text);
     let focused = ui.memory(|m| m.has_focus(id));
     ui.painter().rect(
         sr,
@@ -125,6 +131,10 @@ fn search_field(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, sr: Rect
         .text_color(t.text)
         .show(&mut child)
         .response;
+    // after the field: it gives up the focus on a click outside its own rect
+    if bx.clicked() {
+        ui.memory_mut(|m| m.request_focus(id));
+    }
     if resp.changed() {
         let q = app.ui.search.clone();
         let _ = app.run("library.filter", json!({"text": q}));
@@ -172,9 +182,9 @@ fn filter_button(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, sr: Rec
 fn right_icons(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, full: Rect) -> f32 {
     // right icons
     let mut x = full.right() - 18.0;
-    // saving is failing: the cloud icon turns into a warning until a save succeeds
+    // saving is failing: a warning shows until a save succeeds (nothing is shown otherwise)
     let unsaved = app.session.unsaved().map(|(n, e)| unsaved_tip(n, e));
-    let cloud_tip = unsaved.as_deref().unwrap_or("Local library — no cloud account needed");
+    let cloud_tip = unsaved.as_deref().unwrap_or_default();
     // Import Photos… beside Export, always one click away, with the key it is bound to now
     let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
     let import_tip = match crate::shortcuts::shortcut_of(&app.ui.settings.keymap, "file.addPhotos") {
@@ -189,6 +199,10 @@ fn right_icons(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, full: Rec
         ("import", Icon::Plus, import_tip.as_str(), "file.addPhotos"),
         ("bell", Icon::Bell, "Activity", "panel.activity"),
     ] {
+        let warn = id == "cloud" && unsaved.is_some();
+        if id == "cloud" && !warn {
+            continue;
+        }
         let r = Rect::from_center_size(pos2(x, full.center().y), vec2(28.0, 28.0));
         let tip = crate::i18n::tr(tip);
         let resp = ui.interact(r, egui::Id::unique(("top", id)), Sense::click());
@@ -196,7 +210,6 @@ fn right_icons(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, full: Rec
         let resp = resp.on_hover_text(tip);
         crate::widgets::announce(&resp, name);
         register(ui, format!("icon:{id}"), r);
-        let warn = id == "cloud" && unsaved.is_some();
         let colour = if warn {
             t.caution
         } else if resp.hovered() {
