@@ -22,6 +22,9 @@ pub struct Face {
     pub photo: u64,
     pub index: usize,
     pub rect: lightcraft_geom::Rect,
+    /// its region's box in the catalog when the page was made (`rect` may be the detector's), to tell the region at
+    /// `index` is still this face
+    pub region: lightcraft_geom::Rect,
     pub score: f32,
 }
 
@@ -35,15 +38,23 @@ pub struct PersonPage {
     /// Recognition is on, so an empty "More" means "none yet" and not "not looking".
     pub ready: bool,
     pub pending: usize,
+    /// The face chosen as their picture in People (photo, region index), if one is.
+    pub cover: Option<(u64, usize)>,
+    /// How many faces are set aside as "not them" (never offered in "More" again).
+    pub dismissed: usize,
+    /// The "More" faces shown after the others because they look more like a face set aside (photo, region index).
+    pub like_set_aside: std::collections::HashSet<(u64, usize)>,
 }
 
 fn face_of(v: &Value) -> Option<Face> {
     let rect = |r: &Value| Some(lightcraft_geom::Rect { x0: r["x0"].as_f64()?, y0: r["y0"].as_f64()?, x1: r["x1"].as_f64()?, y1: r["y1"].as_f64()? });
+    let region = rect(&v["rect"])?;
     Some(Face {
         photo: v["photo"].as_u64()?,
         index: usize::try_from(v["index"].as_u64()?).ok()?,
         // shown by the detector's box when the scan has one: every face equally close
-        rect: rect(&v["view"]).or_else(|| rect(&v["rect"]))?,
+        rect: rect(&v["view"]).unwrap_or(region),
+        region,
         score: v["score"].as_f64().unwrap_or(0.0) as f32,
     })
 }
@@ -58,24 +69,132 @@ pub fn parse(v: &Value) -> PersonPage {
         more: faces("more"),
         ready: v["ready"] == true,
         pending: v["pendingPhotos"].as_u64().map_or(0, |n| usize::try_from(n).unwrap_or(0)),
+        cover: v["cover"]["photo"].as_u64().zip(v["cover"]["index"].as_u64().and_then(|i| usize::try_from(i).ok())),
+        dismissed: v["dismissed"].as_u64().map_or(0, |n| usize::try_from(n).unwrap_or(0)),
+        like_set_aside: v["more"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|f| f["likeSetAside"] == true)
+            .filter_map(|f| f["photo"].as_u64().zip(f["index"].as_u64().and_then(|i| usize::try_from(i).ok())))
+            .collect(),
     }
 }
 
-/// The page for `name`, asked for again only when the catalog changed, or (while the scan runs) at most once a second
-/// as it learns more faces.
+/// What a person page is made from, as two numbers: the library's named faces (where, which box, which name, whether the
+/// photo is in the library), and all its faces, unnamed ones too. A catalog change that leaves both alone (a rating, an
+/// edit, a photo opened and checked) does not need the page made again.
+///
+/// Each photo's faces are summed up on their own, and the two numbers are the sums of those: brought up to date, only
+/// the photos changed since are looked at again (the scan names none, but finds faces on one photo after another, and a
+/// large library would be gone through whole at each).
+#[derive(Default)]
+pub struct FacesSignature {
+    /// the catalog revision it is of (`None` before it was first made)
+    revision: Option<u64>,
+    /// each photo with faces: (named faces, all faces)
+    photos: std::collections::HashMap<u64, (u64, u64)>,
+    sums: (u64, u64),
+}
+
+impl FacesSignature {
+    /// The two numbers for the catalog as it is now.
+    pub fn of(&mut self, cat: &lightcraft_catalog::Catalog) -> (u64, u64) {
+        if self.revision == Some(cat.revision) {
+            return self.sums;
+        }
+        match self.revision.and_then(|r| cat.touched_since(r)) {
+            Some(ids) => {
+                for id in ids {
+                    let now = cat.photo(id).map_or((0, 0), |p| photo_faces(p));
+                    let before = if now == (0, 0) { self.photos.remove(&id.0) } else { self.photos.insert(id.0, now) }.unwrap_or((0, 0));
+                    self.sums = (self.sums.0.wrapping_sub(before.0).wrapping_add(now.0), self.sums.1.wrapping_sub(before.1).wrapping_add(now.1));
+                }
+            }
+            // what changed isn't known: every photo
+            None => {
+                self.photos = cat.photos().map(|p| (p.id.0, photo_faces(p))).filter(|(_, f)| *f != (0, 0)).collect();
+                self.sums = self.photos.values().fold((0, 0), |(n, a), f| (n.wrapping_add(f.0), a.wrapping_add(f.1)));
+            }
+        }
+        self.revision = Some(cat.revision);
+        self.sums
+    }
+}
+
+/// One photo's share of [`FacesSignature`]: (its named faces, all its faces), `(0, 0)` without faces.
+fn photo_faces(p: &lightcraft_catalog::Photo) -> (u64, u64) {
+    use std::hash::{Hash, Hasher};
+    let (mut named, mut all) = (std::collections::hash_map::DefaultHasher::new(), std::collections::hash_map::DefaultHasher::new());
+    let (mut any_named, mut any) = (false, false);
+    for r in p.meta.regions.iter().filter(|r| r.kind == lightcraft_meta::RegionKind::Face) {
+        let face = (p.id.0, p.in_library(), r.name.as_deref(), [r.rect.x0, r.rect.y0, r.rect.x1, r.rect.y1].map(f64::to_bits));
+        face.hash(&mut all);
+        any = true;
+        if r.name.is_some() {
+            face.hash(&mut named);
+            any_named = true;
+        }
+    }
+    (if any_named { named.finish() } else { 0 }, if any { all.finish() } else { 0 })
+}
+
+/// Whether a person page made earlier still holds: no named face changed, and either nothing else about the faces did
+/// (the scan's embeddings, unnamed faces it found) or it was made too recently to be made again yet.
+fn keep_page(named_same: bool, all_same: bool, scan_same: bool, waited: bool) -> bool {
+    named_same && (!waited || (all_same && scan_same))
+}
+
+/// The page for `name`, asked for again when a named face of the library or a chosen picture changed. While the scan
+/// learns faces (new embeddings, new unnamed faces found), at most once a second, and no more than a tenth of the time
+/// making it takes: a person page in a large library takes seconds.
 fn page_for(app: &mut LightcraftApp, name: &str, now: f64) -> Arc<PersonPage> {
     let (rev, indexed) = (app.session.catalog.revision, app.caches.faces_indexed);
+    let ((made_named, made_all), cost) = app.caches.person_page_made;
+    let mut keep = None;
     if let Some((n, r, i, at, page)) = &app.caches.person_page
         && n == name
-        && *r == rev
-        && (*i == indexed || now - *at < 1.0)
+        && app.caches.person_page_gen == app.session.people_gen
     {
-        return page.clone();
+        let waited = now - *at >= (cost * 10.0).max(1.0);
+        // the faces are looked at only when the catalog changed
+        let (named_same, all_same) = if *r == rev {
+            (true, !app.caches.person_page_stale)
+        } else {
+            let (named, all) = app.caches.faces_signature.of(&app.session.catalog);
+            (named == made_named, all == made_all)
+        };
+        if keep_page(named_same, all_same, *i == indexed, waited) {
+            // kept for now although unnamed faces changed: remembered, so the page is made again after the wait
+            app.caches.person_page_stale = !all_same;
+            keep = Some(page.clone());
+        }
     }
+    if let Some(page) = keep {
+        if let Some(cached) = app.caches.person_page.as_mut() {
+            cached.1 = rev;
+        }
+        return page;
+    }
+    let started = web_time::Instant::now();
     let v = app.session.execute("faces.person", &json!({"name": name})).unwrap_or(Value::Null);
     let page = Arc::new(parse(&v));
     app.caches.person_page = Some((name.to_string(), rev, indexed, now, page.clone()));
+    app.caches.person_page_gen = app.session.people_gen;
+    app.caches.person_page_reorder = false;
+    app.caches.person_page_stale = false;
+    app.caches.person_page_made = (app.caches.faces_signature.of(&app.session.catalog), started.elapsed().as_secs_f64());
+    // the engine's page leaves out the faces set aside for good, so those hidden at once have done their job: one
+    // brought back meanwhile (by an agent, say) shows again, and a face that took a hidden one's place on its photo
+    // isn't hidden in its stead
+    let key = name.to_lowercase();
+    app.ui.dismissed_faces.retain(|(n, ..)| *n != key);
     page
+}
+
+/// Whether `f` was set aside for the person named `name` this session (hidden before the engine's next page says so).
+fn hidden(set: &std::collections::HashSet<(String, u64, usize)>, name: &str, f: &Face) -> bool {
+    set.contains(&(name.to_lowercase(), f.photo, f.index))
 }
 
 #[derive(PartialEq)]
@@ -85,16 +204,59 @@ enum Hit {
     Confirm,
     ConfirmAbove,
     Dismiss,
+    /// Show the person by this face in People.
+    MakeCover,
+    /// Show them by their largest face again.
+    AutoCover,
 }
 
-/// The current, session-visible candidates at or above the selected score. The score, not the tile position, is the
-/// boundary: a later tile with an equal score belongs to the batch too.
-fn at_or_above(more: &[&Face], score: f32) -> Vec<(u64, usize)> {
-    more.iter().filter(|f| f.score >= score).map(|f| (f.photo, f.index)).collect()
+/// The current, session-visible candidates at or above the selected face's score. The score, not the tile position, is
+/// the boundary: a later tile with an equal score belongs to the batch too. Faces moved down for looking like one set
+/// aside (`aside`) are never swept in: one of them is named only when it is the selected face.
+fn at_or_above(more: &[&Face], chosen: &Face, aside: &std::collections::HashSet<(u64, usize)>) -> Vec<(u64, usize)> {
+    let me = (chosen.photo, chosen.index);
+    more.iter()
+        .map(|f| (f, (f.photo, f.index)))
+        .filter(|(f, k)| f.score >= chosen.score && (*k == me || !aside.contains(k)))
+        .map(|(_, k)| k)
+        .collect()
 }
 
-fn confirm_above(app: &mut LightcraftApp, ctx: &egui::Context, name: &str, more: &[&Face], score: f32) {
-    let faces: Vec<Value> = at_or_above(more, score).into_iter().map(|(photo, index)| json!({"photo": photo, "index": index})).collect();
+/// Whether each of `faces` is still the region it was on its photo when the page was made. A page kept while the
+/// catalog changed knows a face by its place among the photo's regions: once a region before it goes (a pet's, a focus
+/// area's), that place is another face's, and naming it or setting it aside would act on that one.
+fn still_there<'a>(cat: &lightcraft_catalog::Catalog, mut faces: impl Iterator<Item = &'a Face>) -> bool {
+    faces.all(|f| {
+        cat.photo(lightcraft_catalog::PhotoId(f.photo))
+            .and_then(|p| p.meta.regions.get(f.index))
+            .is_some_and(|r| r.kind == lightcraft_meta::RegionKind::Face && r.rect == f.region)
+    })
+}
+
+fn confirm_above(
+    app: &mut LightcraftApp,
+    ctx: &egui::Context,
+    name: &str,
+    more: &[&Face],
+    chosen: &Face,
+    aside: &std::collections::HashSet<(u64, usize)>,
+) {
+    if app.caches.person_page_reorder {
+        // a face set aside since the page was made can move others down: made again first, and the faces to name are
+        // chosen on the new one
+        app.caches.person_page = None;
+        app.toast(ctx, crate::i18n::tr("Suggestions sorted again after a face was set aside: check them, then confirm again"));
+        ctx.request_repaint();
+        return;
+    }
+    let batch = at_or_above(more, chosen, aside);
+    if !still_there(&app.session.catalog, more.iter().copied().filter(|f| batch.contains(&(f.photo, f.index)))) {
+        // made again first: the key names no face rather than other ones
+        app.caches.person_page = None;
+        ctx.request_repaint();
+        return;
+    }
+    let faces: Vec<Value> = batch.into_iter().map(|(photo, index)| json!({"photo": photo, "index": index})).collect();
     if !faces.is_empty()
         && let Err(error) = app.run("faces.nameFaces", json!({"faces": faces, "name": name}))
     {
@@ -113,21 +275,24 @@ pub(crate) fn handle_bulk_key(app: &mut LightcraftApp, ctx: &egui::Context) -> b
         return false;
     }
     let Some((cached_name, cached_revision, _, _, page)) = &app.caches.person_page else { return false };
-    if *cached_name != name || *cached_revision != app.session.catalog.revision {
+    if *cached_name != name {
         return false;
     }
+    // changed since it was made (a face named or set aside by an agent, say): the key is the page's all the same, and
+    // waits for the new one rather than naming from this one
+    let current = *cached_revision == app.session.catalog.revision && app.caches.person_page_gen == app.session.people_gen;
     let page = page.clone();
     let pointer = ctx.pointer_hover_pos();
     let target = page
         .more
         .iter()
-        .filter(|f| !app.ui.dismissed_faces.contains(&(f.photo, f.index)))
+        .filter(|f| !hidden(&app.ui.dismissed_faces, &name, f))
         .find(|f| {
             let widget = format!("more-face:{}:{}", f.photo, f.index);
             app.widgets.iter().any(|(id, rect)| id == &widget && pointer.is_some_and(|p| rect.contains(p)))
         })
         .or_else(|| {
-            page.more.iter().filter(|f| !app.ui.dismissed_faces.contains(&(f.photo, f.index))).find(|f| {
+            page.more.iter().filter(|f| !hidden(&app.ui.dismissed_faces, &name, f)).find(|f| {
                 ctx.memory(|m| {
                     m.has_focus(egui::Id::unique(("more-face", f.photo, f.index)))
                         || m.has_focus(egui::Id::unique(("more-face-above", f.photo, f.index)))
@@ -135,8 +300,12 @@ pub(crate) fn handle_bulk_key(app: &mut LightcraftApp, ctx: &egui::Context) -> b
             })
         });
     let Some(target) = target else { return false };
-    let more: Vec<&Face> = page.more.iter().filter(|f| !app.ui.dismissed_faces.contains(&(f.photo, f.index))).collect();
-    confirm_above(app, ctx, &name, &more, target.score);
+    if !current {
+        ctx.request_repaint();
+        return true;
+    }
+    let more: Vec<&Face> = page.more.iter().filter(|f| !hidden(&app.ui.dismissed_faces, &name, f)).collect();
+    confirm_above(app, ctx, &name, &more, target, &page.like_set_aside);
     true
 }
 
@@ -159,10 +328,32 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
         if rename.clicked() {
             super::people::open_rename(app, &shown_name);
         }
+        // straight to the faces that look like them, below hundreds of their own; with none yet, More says why
+        let jump = ui.button(crate::i18n::tr("Go to Suggestions")).on_hover_text(crate::i18n::tr("The faces that look like them, below theirs"));
+        register(ui, "person:jumpMore", jump.rect);
+        if jump.clicked() {
+            app.ui.person_jump_more = true;
+        }
         let count = if page.total == 1 { "1 face".to_string() } else { format!("{} faces", page.total) };
         ui.label(RichText::new(count).color(t.text_dim));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(PAD - 4.0);
+            if page.dismissed > 0 {
+                let label = format!("{} ({})", crate::i18n::tr("Bring Back Set-Aside Faces"), page.dismissed);
+                let back = ui.button(label).on_hover_text(crate::i18n::tr("The faces you set aside with × are offered again"));
+                register(ui, "person:restoreDismissed", back.rect);
+                if back.clicked() {
+                    match app.run("faces.dismiss", json!({"name": shown_name, "restore": true})) {
+                        Ok(_) => {
+                            // they are offered again: the page is asked for anew
+                            let key = shown_name.to_lowercase();
+                            app.ui.dismissed_faces.retain(|(n, ..)| *n != key);
+                            app.caches.person_page = None;
+                        }
+                        Err(e) => app.toast(ui.ctx(), e),
+                    }
+                }
+            }
             let photos = ui.button(crate::i18n::tr("Show photos")).on_hover_text(crate::i18n::tr("Their photos in the grid"));
             register(ui, "person:photos", photos.rect);
             if photos.clicked() {
@@ -173,6 +364,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
     });
     ui.add_space(6.0);
     if page.total == 0 {
+        // nowhere to jump to: not kept for another page
+        app.ui.person_jump_more = false;
         super::empty_message(
             ui,
             ui.available_rect_before_wrap(),
@@ -181,8 +374,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
         );
         return;
     }
-    let dismissed = &app.ui.dismissed_faces;
-    let more: Vec<&Face> = page.more.iter().filter(|f| !dismissed.contains(&(f.photo, f.index))).collect();
+    let more: Vec<&Face> = page.more.iter().filter(|f| !hidden(&app.ui.dismissed_faces, &shown_name, f)).collect();
     // what the "More" section says when it has no faces to show
     let recognising = app.caches.faces_active || page.ready;
     // with a model installed the button switches recognition on; without one it opens Settings ▸ Faces
@@ -201,7 +393,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
     let ppp = ui.ctx().pixels_per_point();
     let edge = super::people::tile_edge(app.ui.thumb_size);
     let mut hit: Option<(Hit, Face)> = None;
-    egui::ScrollArea::vertical().auto_shrink(false).show_viewport(ui, |ui, viewport| {
+    // each person's page keeps its own scroll position, and leaves the People index's alone
+    egui::ScrollArea::vertical().id_salt(("person-page", shown_name.to_lowercase())).auto_shrink(false).show_viewport(ui, |ui, viewport| {
         let width = ui.available_width();
         let cols = super::people::columns(width, edge);
         let row_h = edge + super::people::TILE_GAP;
@@ -210,6 +403,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
         let more_top = PAD + confirmed_rows as f32 * row_h + 12.0;
         let total_h = more_top + SECTION_H + more_rows as f32 * row_h + PAD;
         let (area, _) = ui.allocate_exact_size(vec2(width, total_h), Sense::hover());
+        if std::mem::take(&mut app.ui.person_jump_more) {
+            let target = Rect::from_min_size(pos2(area.left(), area.top() + more_top), vec2(width, viewport.height().max(1.0)));
+            ui.scroll_to_rect(target, Some(egui::Align::TOP));
+        }
         let visible = |top: f32, rows: usize| {
             let first = ((viewport.top() - top) / row_h).floor().max(0.0) as usize;
             let last = (((viewport.bottom() - top) / row_h).ceil().max(0.0) as usize).min(rows);
@@ -221,10 +418,19 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
                 let Some(f) = page.confirmed.get(row * cols + col) else { break };
                 shown += 1;
                 let min = area.min + vec2(PAD + col as f32 * (edge + super::people::TILE_GAP), PAD + row as f32 * row_h);
-                if let Hit::Open =
-                    tile(app, ui, &TileSpec { r: Rect::from_min_size(min, vec2(edge, edge)), f, ppp, more: false, name: &shown_name, above_count: 0 })
-                {
-                    hit = Some((Hit::Open, f.clone()));
+                let spec = TileSpec {
+                    r: Rect::from_min_size(min, vec2(edge, edge)),
+                    f,
+                    ppp,
+                    more: false,
+                    name: &shown_name,
+                    above_count: 0,
+                    low: false,
+                    cover: page.cover == Some((f.photo, f.index)),
+                    chosen: page.cover.is_some(),
+                };
+                if let h @ (Hit::Open | Hit::MakeCover | Hit::AutoCover) = tile(app, ui, &spec) {
+                    hit = Some((h, f.clone()));
                 }
             }
         }
@@ -233,7 +439,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
         ui.painter().text(heading, Align2::LEFT_CENTER, "More", t.semibold(15.0), t.text);
         let sub = match &note {
             Some(n) => n.clone(),
-            None => format!("Faces that look like {shown_name}. Click to confirm one, ↑ for all above, or × to hide."),
+            None => format!("Faces that look like {shown_name}. Click to confirm one, ↑ for all above, or × if it is not them."),
         };
         ui.painter().text(pos2(area.left() + PAD, area.top() + more_top + 36.0), Align2::LEFT_CENTER, sub, t.font(12.0), t.text_dim);
         if !recognising {
@@ -255,8 +461,20 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
                 let Some(f) = more.get(row * cols + col) else { break };
                 shown += 1;
                 let min = area.min + vec2(PAD + col as f32 * (edge + super::people::TILE_GAP), grid_top + row as f32 * row_h);
-                let above_count = more.iter().filter(|candidate| candidate.score >= f.score).count();
-                match tile(app, ui, &TileSpec { r: Rect::from_min_size(min, vec2(edge, edge)), f, ppp, more: true, name: &shown_name, above_count }) {
+                let above_count = at_or_above(&more, f, &page.like_set_aside).len();
+                let spec = TileSpec {
+                    r: Rect::from_min_size(min, vec2(edge, edge)),
+                    f,
+                    ppp,
+                    more: true,
+                    name: &shown_name,
+                    above_count,
+                    low: page.like_set_aside.contains(&(f.photo, f.index)),
+                    cover: false,
+                    chosen: false,
+                };
+                match tile(app, ui, &spec) {
+                    Hit::Open => hit = Some((Hit::Open, (*f).clone())),
                     Hit::Confirm => hit = Some((Hit::Confirm, (*f).clone())),
                     Hit::ConfirmAbove => hit = Some((Hit::ConfirmAbove, (*f).clone())),
                     Hit::Dismiss => hit = Some((Hit::Dismiss, (*f).clone())),
@@ -268,6 +486,14 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
         app.renderer.want_variants(shown);
     });
     if let Some((what, f)) = hit {
+        let what = if matches!(what, Hit::Confirm | Hit::Dismiss | Hit::MakeCover) && !still_there(&app.session.catalog, std::iter::once(&f)) {
+            // made again first: the click goes to no face rather than to another one
+            app.caches.person_page = None;
+            ui.ctx().request_repaint();
+            Hit::Nothing
+        } else {
+            what
+        };
         match what {
             Hit::Open => {
                 let _ = app.run("library.select", json!({"ids": [f.photo], "active": f.photo}));
@@ -280,9 +506,60 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
             Hit::Confirm => {
                 let _ = app.run("faces.setName", json!({"id": f.photo, "index": f.index, "name": shown_name}));
             }
-            Hit::ConfirmAbove => confirm_above(app, ui.ctx(), &shown_name, &more, f.score),
+            Hit::ConfirmAbove => confirm_above(app, ui.ctx(), &shown_name, &more, &f, &page.like_set_aside),
             Hit::Dismiss => {
-                app.ui.dismissed_faces.insert((f.photo, f.index));
+                // hidden at once; kept as "not them" for good (#3249), so a later page leaves it out too
+                let key = (shown_name.to_lowercase(), f.photo, f.index);
+                app.ui.dismissed_faces.insert(key.clone());
+                match app.run("faces.dismiss", json!({"name": shown_name, "photo": f.photo, "index": f.index})) {
+                    Ok(v) => {
+                        if let Some((n, _, _, _, page)) = app.caches.person_page.as_mut()
+                            && *n == name
+                        {
+                            let dismissed = v["dismissed"].as_u64().map_or(page.dismissed, |n| usize::try_from(n).unwrap_or(0));
+                            *page = Arc::new(PersonPage { dismissed, ..(**page).clone() });
+                            // the page as patched is current (the face is already hidden): not asked for again, unless
+                            // every face it offered is set aside now, and the next ones are wanted
+                            if page.more.iter().any(|f| !hidden(&app.ui.dismissed_faces, &shown_name, f)) {
+                                app.caches.person_page_gen = app.session.people_gen;
+                                app.caches.person_page_reorder = true;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        // not kept: shown again, to be set aside once it can be
+                        app.ui.dismissed_faces.remove(&key);
+                        app.toast(ui.ctx(), e);
+                    }
+                }
+            }
+            Hit::MakeCover | Hit::AutoCover => {
+                let params = if what == Hit::MakeCover {
+                    json!({"name": shown_name, "photo": f.photo, "index": f.index})
+                } else {
+                    json!({"name": shown_name, "photo": null})
+                };
+                match app.run("faces.setCover", params) {
+                    Ok(_) => {
+                        // the star moves on the page as shown: asking `faces.person` again would also redo its "More"
+                        // faces, which takes long in a large library and changes nothing here
+                        if let Some((n, _, _, _, page)) = app.caches.person_page.as_mut()
+                            && *n == name
+                        {
+                            let cover = (what == Hit::MakeCover).then_some((f.photo, f.index));
+                            *page = Arc::new(PersonPage { cover, ..(**page).clone() });
+                            // the page as patched is current: a change made elsewhere (a script) is asked for again
+                            app.caches.person_page_gen = app.session.people_gen;
+                        }
+                        let done = if what == Hit::MakeCover {
+                            "This face is now their picture in People"
+                        } else {
+                            "Their largest face is their picture again"
+                        };
+                        app.toast(ui.ctx(), crate::i18n::tr(done));
+                    }
+                    Err(e) => app.toast(ui.ctx(), e),
+                }
             }
             Hit::Nothing => {}
         }
@@ -302,12 +579,18 @@ struct TileSpec<'a> {
     name: &'a str,
     /// how many shown faces look at least as much like the person (for a "More" tile)
     above_count: usize,
+    /// a "More" face moved down for looking like a face set aside
+    low: bool,
+    /// the face chosen as their picture in People
+    cover: bool,
+    /// a face is chosen as their picture (so the largest one can be asked for again)
+    chosen: bool,
 }
 
 /// One face tile. A confirmed one opens its photo when clicked; a "More" one is confirmed when clicked, and has a × that
-/// hides it.
+/// sets it aside as not them.
 fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, spec: &TileSpec) -> Hit {
-    let TileSpec { r, f, ppp, more, name, above_count } = *spec;
+    let TileSpec { r, f, ppp, more, name, above_count, low, cover, chosen } = *spec;
     let t = Tokens::get(ui.ctx());
     let salt = if more { "more-face" } else { "person-face" };
     let resp = ui.interact(r, egui::Id::unique((salt, f.photo, f.index)), Sense::click());
@@ -320,6 +603,7 @@ fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, spec: &TileSpec) -> Hit {
     let above_resp = more.then(|| ui.interact(above_rect, egui::Id::unique(("more-face-above", f.photo, f.index)), Sense::click()));
     if more {
         register(ui, format!("more-face-above:{}:{}", f.photo, f.index), above_rect);
+        register(ui, format!("more-face-x:{}:{}", f.photo, f.index), x_rect);
     }
     let hovered = resp.hovered() || x_resp.as_ref().is_some_and(|x| x.hovered()) || above_resp.as_ref().is_some_and(|x| x.hovered());
     let p = ui.painter();
@@ -331,6 +615,13 @@ fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, spec: &TileSpec) -> Hit {
     }
     if hovered {
         p.rect_stroke(r, 3.0, Stroke::new(1.5, Color32::WHITE), StrokeKind::Outside);
+    }
+    if cover {
+        // their picture in People: a star in the corner
+        let badge = Rect::from_min_size(pos2(r.left() + 4.0, r.bottom() - 24.0), vec2(20.0, 20.0));
+        p.circle_filled(badge.center(), 10.0, Color32::from_rgba_unmultiplied(30, 30, 30, 220));
+        crate::icons::paint(p, badge.shrink(4.0), crate::icons::Icon::StarFilled, Color32::WHITE);
+        register(ui, format!("person-face-star:{}:{}", f.photo, f.index), badge);
     }
     let mut hit = Hit::Nothing;
     if more && hovered {
@@ -353,14 +644,42 @@ fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, spec: &TileSpec) -> Hit {
         p.line_segment([pos2(ac.x, ac.y - 5.0), pos2(ac.x + 4.0, ac.y - 1.0)], arrow);
     }
     if more {
-        let tip = format!("Looks like {name} (similarity {:.2}). Click to confirm.", f.score);
+        // a face moved down says why, or the order would look broken
+        let tip = if low {
+            format!(
+                "Looks like {name} (similarity {:.2}), but more like a face set aside for them, so it comes after the others. Click to confirm, right-click to open the photo.",
+                f.score
+            )
+        } else {
+            format!("Looks like {name} (similarity {:.2}). Click to confirm, right-click to open the photo.", f.score)
+        };
         let _ = resp.clone().on_hover_text(tip);
-        if let Some(above) = above_resp.as_ref() {
-            let _ = above.clone().on_hover_text(format!(
-                "All above: confirm {above_count} faces as {name} (this face and every shown face with equal or higher similarity). Press A."
-            ));
+        if let Some(x) = x_resp.as_ref() {
+            let _ = x.clone().on_hover_text(format!("Not {name}: no longer offered for them (the button at the top brings these faces back)"));
         }
-        if x_resp.as_ref().is_some_and(|x| x.clicked()) {
+        if let Some(above) = above_resp.as_ref() {
+            let tip = if low {
+                format!(
+                    "All above: confirm {above_count} faces as {name} (this face, which looks like a face set aside, and every shown face with equal or higher similarity that does not). Press A."
+                )
+            } else {
+                format!(
+                    "All above: confirm {above_count} faces as {name} (this face and every shown face with equal or higher similarity, except those moved down for looking like a face set aside). Press A."
+                )
+            };
+            let _ = above.clone().on_hover_text(tip);
+        }
+        // a right click offers to open the photo before deciding
+        crate::widgets::context_menu(&resp, |ui| {
+            let item = ui.button(crate::i18n::tr("Open Photo"));
+            register(ui, "more-face-menu:open", item.rect);
+            if item.clicked() {
+                hit = Hit::Open;
+            }
+        });
+        if hit == Hit::Open {
+            // the menu's choice wins
+        } else if x_resp.as_ref().is_some_and(|x| x.clicked()) {
             hit = Hit::Dismiss;
         } else if above_resp.as_ref().is_some_and(|x| x.clicked()) {
             hit = Hit::ConfirmAbove;
@@ -368,10 +687,29 @@ fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, spec: &TileSpec) -> Hit {
             hit = Hit::Confirm;
         }
     } else {
-        let _ = resp.clone().on_hover_text(format!("{name} — click to open this photo"));
+        let tip = if cover {
+            format!("{name}'s picture in People — click to open this photo, right-click to change it")
+        } else {
+            format!("{name} — click to open this photo, right-click to make it their picture in People")
+        };
+        let _ = resp.clone().on_hover_text(tip);
         if resp.clicked() {
             hit = Hit::Open;
         }
+        crate::widgets::context_menu(&resp, |ui| {
+            let use_it = ui.add_enabled(!cover, egui::Button::new(crate::i18n::tr("Use as Person's Picture")));
+            register(ui, "person-face-menu:cover", use_it.rect);
+            if use_it.clicked() {
+                hit = Hit::MakeCover;
+            }
+            if chosen {
+                let auto = ui.button(crate::i18n::tr("Use Their Largest Face"));
+                register(ui, "person-face-menu:autoCover", auto.rect);
+                if auto.clicked() {
+                    hit = Hit::AutoCover;
+                }
+            }
+        });
     }
     hit
 }
@@ -380,16 +718,104 @@ fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, spec: &TileSpec) -> Hit {
 mod tests {
     use super::*;
 
+    /// #3317: a person page is made again at once when a named face changes; when the scan only finds unnamed faces or
+    /// embeds some, no sooner than the wait (a page takes seconds in a large library); and never for a rating or an edit.
+    /// #3317: the library's faces are summed up photo by photo, and kept up to date from the photos changed since: the
+    /// same numbers as summed up anew, and a rating changes neither.
+    #[test]
+    fn the_faces_are_summed_up_again_only_where_they_changed() {
+        use lightcraft_catalog::{Catalog, Op, Photo, Source};
+        let face = |x: f64, name: Option<&str>| lightcraft_meta::Region {
+            rect: lightcraft_geom::Rect { x0: x, y0: 0.2, x1: x + 0.1, y1: 0.4 },
+            kind: lightcraft_meta::RegionKind::Face,
+            name: name.map(str::to_string),
+            description: None,
+        };
+        let mut c = Catalog::new();
+        let ids: Vec<_> = (0..3)
+            .map(|i| {
+                let id = c.alloc_photo_id();
+                let mut p = Photo::new(id, Source::Demo { scene: 1 }, &format!("{i}.jpg"), "JPEG", 6000, 4000, "2026-09-30T10:00:00");
+                p.meta.regions = vec![face(0.1, Some("Jane Doe")), face(0.5, None)];
+                c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+                id
+            })
+            .collect();
+        let mut kept = FacesSignature::default();
+        let first = kept.of(&c);
+        let set = |c: &mut Catalog, id, regions| {
+            let mut meta = c.photo(id).unwrap().meta.clone();
+            meta.regions = regions;
+            c.apply(Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+        };
+        c.apply(Op::SetRating { id: ids[0], rating: 4 }).unwrap();
+        assert_eq!(kept.of(&c), first, "a rating is not a face");
+        // a face found by the scan: all of them change, not the named ones
+        set(&mut c, ids[1], vec![face(0.1, Some("Jane Doe")), face(0.5, None), face(0.8, None)]);
+        let found = kept.of(&c);
+        assert_eq!(found.0, first.0);
+        assert_ne!(found.1, first.1);
+        // a face named, then a photo removed from the library: both change; and each time the numbers are the ones a
+        // new summing up gives
+        set(&mut c, ids[2], vec![face(0.1, Some("Jane Doe")), face(0.5, Some("Ann"))]);
+        let named = kept.of(&c);
+        assert_ne!(named.0, found.0);
+        assert_eq!(named, FacesSignature::default().of(&c));
+        c.apply(Op::SetDeleted { id: ids[0], deleted: true }).unwrap();
+        assert_ne!(kept.of(&c).0, named.0);
+        assert_eq!(kept.of(&c), FacesSignature::default().of(&c));
+        // set back as it was: the numbers as they were
+        c.apply(Op::SetDeleted { id: ids[0], deleted: false }).unwrap();
+        set(&mut c, ids[2], vec![face(0.1, Some("Jane Doe")), face(0.5, None)]);
+        set(&mut c, ids[1], vec![face(0.1, Some("Jane Doe")), face(0.5, None)]);
+        assert_eq!(kept.of(&c), first);
+    }
+
+    #[test]
+    fn a_person_page_is_made_again_when_it_must_and_no_more() {
+        // (named faces the same, all faces the same, scan the same, waited) → kept
+        assert!(keep_page(true, true, true, true), "a rating, an edit: kept however long ago");
+        assert!(!keep_page(false, true, true, false), "a face named: made again at once");
+        assert!(keep_page(true, false, true, false), "the scan found unnamed faces a moment ago: not yet");
+        assert!(!keep_page(true, false, true, true), "and after the wait: made again");
+        assert!(keep_page(true, true, false, false) && !keep_page(true, true, false, true), "new embeddings: the same wait");
+    }
+
     #[test]
     fn all_above_uses_score_including_later_ties_and_only_visible_faces() {
-        let face = |photo, score| Face { photo, index: 0, rect: lightcraft_geom::Rect { x0: 0.0, y0: 0.0, x1: 1.0, y1: 1.0 }, score };
+        let face = |photo, score| Face {
+            photo,
+            index: 0,
+            rect: lightcraft_geom::Rect { x0: 0.0, y0: 0.0, x1: 1.0, y1: 1.0 },
+            region: lightcraft_geom::Rect::default(),
+            score,
+        };
         // The tie is deliberately after a lower-score tile: an index slice would miss it.
         let candidates = [face(1, 0.95), face(2, 0.80), face(3, 0.70), face(4, 0.80), face(5, 0.60)];
         let dismissed = (2_u64, 0_usize);
         let shown: Vec<&Face> = candidates.iter().filter(|f| (f.photo, f.index) != dismissed).collect();
-        assert_eq!(at_or_above(&shown, 0.80), vec![(1, 0), (4, 0)], "the dismissed face is excluded and the late tie included");
-        assert_eq!(at_or_above(&shown, 0.95), vec![(1, 0)], "the highest choice names only itself");
-        assert_eq!(at_or_above(&shown, 0.60), vec![(1, 0), (3, 0), (4, 0), (5, 0)], "the lowest choice names the full displayed range");
+        let none = std::collections::HashSet::new();
+        assert_eq!(at_or_above(&shown, &face(4, 0.80), &none), vec![(1, 0), (4, 0)], "the dismissed face is excluded and the late tie included");
+        assert_eq!(at_or_above(&shown, &face(1, 0.95), &none), vec![(1, 0)], "the highest choice names only itself");
+        assert_eq!(
+            at_or_above(&shown, &face(5, 0.60), &none),
+            vec![(1, 0), (3, 0), (4, 0), (5, 0)],
+            "the lowest choice names the full displayed range"
+        );
+        // a face moved down for looking like one set aside (6, shown last) is not swept in from above it, even with a
+        // higher score; from one of those, the ones above it count as usual
+        let mut candidates = candidates.to_vec();
+        candidates.push(face(6, 0.90));
+        let shown: Vec<&Face> = candidates.iter().filter(|f| (f.photo, f.index) != dismissed).collect();
+        let aside = std::iter::once((6_u64, 0_usize)).collect();
+        assert_eq!(at_or_above(&shown, &face(5, 0.60), &aside), vec![(1, 0), (3, 0), (4, 0), (5, 0)], "the face like a set-aside one is left out");
+        assert_eq!(at_or_above(&shown, &face(6, 0.90), &aside), vec![(1, 0), (6, 0)], "chosen itself, it goes with those above its score");
+        // another one moved down, with a higher score: named only when chosen itself, not swept in with a lower one
+        candidates.push(face(7, 0.92));
+        let shown: Vec<&Face> = candidates.iter().filter(|f| (f.photo, f.index) != dismissed).collect();
+        let aside = [(6_u64, 0_usize), (7, 0)].into_iter().collect();
+        assert_eq!(at_or_above(&shown, &face(6, 0.90), &aside), vec![(1, 0), (6, 0)], "the other one moved down stays out");
+        assert_eq!(at_or_above(&shown, &face(7, 0.92), &aside), vec![(1, 0), (7, 0)]);
     }
 
     #[test]
@@ -401,13 +827,17 @@ mod tests {
                 {"photo": 4, "index": 1},
                 {"photo": "x", "index": 0, "rect": {"x0": 0.1, "y0": 0.2, "x1": 0.3, "y1": 0.5}},
             ],
-            "more": [{"photo": 9, "index": 2, "score": 0.5, "rect": {"x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0}}],
+            "more": [
+                {"photo": 9, "index": 2, "score": 0.5, "rect": {"x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0}},
+                {"photo": 8, "index": 0, "score": 0.6, "likeSetAside": true, "rect": {"x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0}},
+            ],
         });
         let page = parse(&v);
         assert_eq!((page.name.as_str(), page.total, page.ready, page.pending), ("Jane Doe", 2, true, 7));
         assert_eq!(page.confirmed.len(), 1, "a face without a box or a photo is dropped");
         assert_eq!((page.confirmed[0].photo, page.confirmed[0].index), (3, 0));
-        assert_eq!((page.more.len(), page.more[0].score), (1, 0.5));
+        assert_eq!((page.more.len(), page.more[0].score), (2, 0.5));
+        assert_eq!(page.like_set_aside, std::iter::once((8, 0)).collect(), "the face moved down for looking like one set aside");
         // nothing, or nonsense, is an empty page and not a crash
         for bad in [Value::Null, json!([]), json!({"confirmed": "x", "more": 5, "total": -1})] {
             assert_eq!(parse(&bad), PersonPage::default(), "{bad}");
