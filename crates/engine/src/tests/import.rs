@@ -2931,6 +2931,30 @@ fn import_preview_reports_what_the_scan_skipped() {
     let _ = std::fs::remove_dir_all(&deep);
 }
 
+/// Issue #4319: `library.import` says what its folder walk left out, as `library.importPreview` does, so a script that
+/// imports a folder directly can tell a file that was skipped from one that is missing. A file named on its own is
+/// tried (and fails), never counted as skipped; XMP sidecars aren't counted.
+#[test]
+fn import_reports_what_the_folder_walk_skipped() {
+    let src = temp_dir("import-skipped");
+    write_png(&src.join("a.png"), 1);
+    write_png(&src.join("sub/b.png"), 2);
+    std::fs::write(src.join("a.xmp"), b"x").unwrap();
+    std::fs::write(src.join("notes.txt"), b"not a photo").unwrap();
+    std::fs::write(src.join("sub/readme.md"), b"x").unwrap();
+    let mut s = Session::new().with_fs();
+    let preview = s.execute("library.importPreview", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()], "mode": "add"})).unwrap();
+    assert_eq!(ids(&r, "imported"), 2, "{r}");
+    assert_eq!(r["skipped"], json!({"unreadable": 0, "unsupported": 2}), "notes.txt and readme.md are reported: {r}");
+    assert_eq!(r["skipped"], preview["skipped"], "the import and its preview agree");
+
+    let r = s.execute("library.import", &json!({"paths": [src.join("notes.txt").to_string_lossy()], "mode": "add"})).unwrap();
+    assert_eq!(r["failed"].as_array().map(Vec::len), Some(1), "a file named on its own is tried: {r}");
+    assert_eq!(r["skipped"], json!({"unreadable": 0, "unsupported": 0}), "{r}");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 /// XMP sidecars are read with their photos, so they are not "skipped": the expansion, the scan and
 /// `library.importPreview` count them (in any letter case, in subfolders too) as nothing, and still
 /// count every other file that is not a photo.
@@ -3257,7 +3281,13 @@ fn a_stale_refresh_never_rebuilds_a_proxy_from_itself() {
     let pixels = lightcraft_raster::Rgb32f::from_fn(48, 32, |x, y| [0.02 + (x % 9) as f32 * 0.05, 0.03 + (y % 7) as f32 * 0.04, 0.06]);
     let info = lightcraft_pipeline::SourceInfo { raw: true, as_shot_temp: 5200.0, as_shot_tint: 6.0, ..Default::default() };
     let (p, i) = (pixels.clone(), info.clone());
-    s.media.file_loader = Some(std::sync::Arc::new(move |_path, _max_edge, _| Ok((p.clone(), i.clone()))));
+    s.media.file_loader = Some(std::sync::Arc::new(move |path, _max_edge, _| {
+        // Like the production loader, this fixture cannot decode an offline original.
+        if !std::path::Path::new(path).is_file() {
+            return Err("original is offline".into());
+        }
+        Ok((p.clone(), i.clone()))
+    }));
     s.execute("library.import", &json!({"paths": [src.join("a.png").to_string_lossy()]})).unwrap();
     let id = s.active().unwrap();
     // a raw that takes the per-file camera look, so an older fit makes its proxy stale
@@ -3573,6 +3603,7 @@ fn smart_preview_look_marker_is_read_safely() {
     assert!(!crate::smart::look_checked(&dir), "no marker");
     let cur = crate::camera_preview::LOOK_VERSION;
     let enc = crate::smart::ENCODE_VERSION;
+    let lens = crate::lens_profiles::cache_key();
     for (text, checked) in [
         (String::new(), false),
         ("banana".into(), false),
@@ -3584,8 +3615,11 @@ fn smart_preview_look_marker_is_read_safely() {
         (format!("{cur}\n"), false),
         (format!("{cur} {}\n", enc.saturating_sub(1)), false),
         (format!("{cur} banana\n"), false),
-        (format!("{cur} {enc}\n"), true),
-        (format!(" {} {}\n", cur + 1, enc + 1), true),
+        (format!("{cur} {enc}\n"), false),
+        (format!("{cur} {enc} {lens}\n"), true),
+        (format!("{cur} {enc} {}\n", lens.wrapping_add(1)), false),
+        (format!(" {} {}\n", cur + 1, enc + 1), false),
+        (format!(" {} {} {lens}\n", cur + 1, enc + 1), true),
     ] {
         std::fs::write(dir.join("look-version"), &text).unwrap();
         assert_eq!(crate::smart::look_checked(&dir), checked, "{text:?}");

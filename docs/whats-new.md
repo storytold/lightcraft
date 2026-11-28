@@ -1,6 +1,52 @@
 # What's new in LightCraft
 
+## 2026-10-29
+
+### Select by a single star rating
+- Edit ▸ Select by now lists each rating on its own (★ only through ★★★★★ only) below the “and higher” rows,
+  next to Unrated. Choosing ★★★ only selects the photos in view rated exactly three stars, where before the menu
+  could only select three stars and up (#3311).
+
 ## Unreleased
+
+### Scripted imports say what they skipped
+- `library.import` now reports what its folder walk left out, `skipped: {unreadable, unsupported}`, as
+  `library.importPreview` already did, so a script or MCP client can tell a skipped file from a missing one (#4319).
+
+### The crop shows its size in pixels
+- The Crop panel shows the size the crop leaves, in pixels (as a full-size export makes it, such as 2160 × 2700 px),
+  and dragging a crop handle shows it beside the pointer as it changes, so you can keep a minimum resolution while
+  you crop (issue #4106).
+
+### Shift+Tab hides all the panels
+- Window ▸ Hide All Panels (Shift+Tab, Lightroom Classic's Toggle All Panels) hides the left sidebar, the right panel,
+  the Presets column and the filmstrip; the next press brings back exactly what was shown, so a panel that was already
+  hidden stays hidden. Showing a panel by hand in between starts over, and with no panel shown and nothing to bring
+  back it shows the usual panels. A keymap that gives Shift+Tab to another command
+  keeps it, and in a text field Shift+Tab still moves the keyboard focus (carries #1195).
+
+### AI Defringe
+- Optics ▸ Defringe has an AI Defringe switch with an Amount. It removes colour fringes of every hue (purple,
+  blue-violet and green edges from the lens) with a trained model and leaves real colours alone. Install a model of your
+  own in Settings ▸ AI Defringe: LightCraft comes with none. Each photo's correction is made once in the background and
+  kept, so switching it off and on or moving Amount is instant, and an export makes it if it is missing. See
+  [AI Defringe](ai-defringe.md).
+
+### Space opens a photo from the grid
+- In the Grid and the Square Grid, Space opens the active photo in Detail, fitted to the window, as in Lightroom
+  Classic (issue #4417). There, Space toggles the zoom as before.
+
+### Face suggestions match the same person more often
+- Each face is now read both as it is and mirrored, and the two are averaged before it is compared with the faces you
+  have named. On the LFW benchmark with AuraFace, about 1 in 6 of a person's photos that used to miss the match bar now
+  reach it, and more for small faces in group photos, with no more strangers matched (issue #1920). Recognising a face takes about
+  twice as long, and the faces already scanned are scanned once more, in the background.
+
+### Pressing at the search box's edge no longer moves the window
+- On macOS the top bar is the window's title bar, and the search box's padding around its text still belonged to
+  it: a press there, where a text selection often starts, dragged the whole window instead. The whole box is now
+  the search field's. A click anywhere in it puts the cursor in the field, and only the bar's empty space moves the
+  window (#2807).
 
 ### Export subfolder variables
 - The Export dialog's Subfolder field now supports `{album}` (active album name sanitized for filesystem safety, empty outside an album view), `{date}` (batch export date in `YYYYMMDD`, local time), and `{hour}` (batch export time in `HHMM`, local time). An **Insert…** dropdown next to the field inserts tokens at the cursor. Tokens are stored in presets and expanded at export time, so the same preset produces dated subfolders on every use.
@@ -184,6 +230,20 @@
   the selected image in Detail after the asynchronous import completes. Grid and Last continue to open launch files in
   Photo Grid. Populated-library launches without image arguments keep their saved view. (#3028)
 ## 2026-10-30
+
+### The pointer stays visible in the Flatpak on GNOME Wayland when its cursor theme loads by name
+- In the Flatpak on a Wayland desktop without the cursor-shape protocol (GNOME 46, for one), the mouse pointer could
+  vanish for good after Crop & Rotate or a brush hid it: the sandbox couldn't see any cursor theme. The Flatpak now
+  points at the host's cursor themes, as VectorCraft's does (issue #1657). Where the host's default theme is a
+  symlink the sandbox can't follow (Ubuntu's `/etc/alternatives`), name a theme once:
+  `flatpak override --user --env=XCURSOR_THEME=Adwaita ai.storyteller.lightcraft`, with in place of `Adwaita` any
+  cursor theme installed in `/usr/share/icons` or `~/.local/share/icons` (a theme in `~/.icons` also needs
+  `flatpak override --user --filesystem=~/.icons:ro ai.storyteller.lightcraft`).
+
+### ↑ and ↓ keep the Survey together
+- In Survey (N) and Compare (C), ↑ and ↓ now step through the photos on screen, as → and ← do. Before, they ran the
+  grid's Photo Below and Photo Above, which selected a single photo, so the survey shrank to that one photo
+  (issue #3640).
 
 ### Lightroom catalogs with a print inside a collection import their collections
 - Lightroom Classic can keep a saved print, book, slideshow or web gallery inside a plain collection, but a

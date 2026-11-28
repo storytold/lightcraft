@@ -307,6 +307,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "---",
             "view.leftPanel",
             "view.rightPanel",
+            "view.allPanels",
             "@Sidebar Sections",
             "view.photoCounts",
             "view.filmstrip",
@@ -468,6 +469,8 @@ pub fn checked(app: &LightcraftApp, id: &str) -> Option<bool> {
         "view.people" => Some(u.view == ViewMode::People),
         "view.reference" => Some(u.view == ViewMode::Reference),
         "view.leftPanel" => Some(u.left_panel),
+        "view.rightPanel" => Some(u.right != RightPanel::None),
+        "view.allPanels" => Some(u.all_panels_hidden()),
         "view.faceBoxes" => Some(u.face_boxes),
         "view.focusPoint" => Some(u.settings.focus_point),
         "view.zoomToFocus" => Some(u.settings.zoom_to_focus),
@@ -876,6 +879,18 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
             v.push(MenuNode::Separator);
             v.extend((1..=5u8).map(|r| {
                 item("library.selectBy", json!({"rating": r}), crate::i18n::tr_format!("{} and higher", "★".repeat(r as usize)), None, true, None)
+            }));
+            // each rating on its own (#3311), with Unrated as the zero row
+            v.push(MenuNode::Separator);
+            v.extend((1..=5u8).map(|r| {
+                item(
+                    "library.selectBy",
+                    json!({"rating": r, "ratingOp": "eq"}),
+                    crate::i18n::tr_format!("{} only", "★".repeat(r as usize)),
+                    None,
+                    true,
+                    None,
+                )
             }));
             v.push(item("library.selectBy", json!({"rating": 0, "ratingOp": "eq"}), "Unrated", None, true, None));
             v.push(MenuNode::Separator);

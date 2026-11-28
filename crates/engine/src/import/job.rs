@@ -1,5 +1,5 @@
 use super::commit::{How, Plan, Slot, Transfer, commit_prepared, name_family, run_transfers, system_clock};
-use super::files::{BrowsedFile, Seen, browsed_files_changed, expand_knowing, probe_all, reusable_probes, sidecars_of};
+use super::files::{BrowsedFile, Seen, browsed_files_changed, expand_report_knowing, probe_all, reusable_probes, sidecars_of};
 use super::types::{FileFacts, ImportCandidate, ImportMode, ImportOptions, ImportReport, Kept, OnDeleted};
 use super::{HashMap, ListedFolders, MediaKind, Path, PathBuf, Photo, PhotoId, ProbeInfo, Session, Source};
 
@@ -69,6 +69,8 @@ pub struct ImportJob {
 #[derive(Debug, Default)]
 pub struct Prepared {
     pub scanned: usize,
+    /// What [`ImportJob::prepare`]'s folder walk left out.
+    pub skipped: super::types::Skipped,
     pub(super) items: Vec<PreparedItem>,
 }
 
@@ -246,8 +248,10 @@ impl ImportJob {
     /// with the names and outcomes of one after another. Nothing in the catalog changes. Stops
     /// before the next file once `cancel` is set.
     pub fn prepare(&mut self, paths: &[String], cancel: &std::sync::atomic::AtomicBool) -> Prepared {
-        let files = self.expand(paths);
-        self.prepare_files(files, cancel)
+        let found = self.expand_report(paths);
+        let mut prepared = self.prepare_files(found.files, cancel);
+        prepared.skipped = super::types::Skipped { unreadable: found.unreadable, unsupported: found.unsupported };
+        prepared
     }
 
     /// Hand the job the folders the review that started it listed ([`ScanOutput::listed`]).
@@ -260,12 +264,17 @@ impl ImportJob {
     /// Expand `paths` (folders recursively, the library's own folder skipped) into the files an
     /// import would handle; counted in [`ImportJob::total`].
     pub fn expand(&mut self, paths: &[String]) -> Vec<String> {
+        self.expand_report(paths).files
+    }
+
+    /// [`ImportJob::expand`], with what the folder walk left out.
+    fn expand_report(&mut self, paths: &[String]) -> super::Expansion {
         // (a file the review listed is a file: no round trip to a share to ask)
         let mut listed = std::mem::take(&mut self.listed);
         let mut walked = ListedFolders::default();
         // (the folders' times are looked at now, not as an earlier batch found them)
         listed.new_batch();
-        let (files, _) = expand_knowing(
+        let found = expand_report_knowing(
             paths,
             self.lib_dir.as_deref(),
             crate::walk::Limits::default(),
@@ -279,8 +288,8 @@ impl ImportJob {
         listed.absorb(walked);
         listed.forget_files();
         self.listed = listed;
-        self.total.fetch_add(files.len(), std::sync::atomic::Ordering::Relaxed);
-        files
+        self.total.fetch_add(found.files.len(), std::sync::atomic::Ordering::Relaxed);
+        found
     }
 
     /// When the import started ([`Session::clock`]), for [`commit_prepared`].
@@ -374,7 +383,7 @@ impl ImportJob {
         self.listed.new_batch();
         let opts = self.opts.clone();
         let mode = self.mode;
-        let mut out = Prepared { scanned: files.len(), items: Vec::new() };
+        let mut out = Prepared { scanned: files.len(), ..Default::default() };
         let mut todo = Vec::new();
         // browsed files replaced since: probed again with `todo`, their records brought up to date as they join the library
         let mut changed: HashMap<String, PhotoId> = HashMap::new();
@@ -682,6 +691,7 @@ impl Session {
             slide: None,
             preview_cut: None,
             display_fit: None,
+            ai_defringe: None,
         };
         let embedded = match (&self.media.preview_loader, c.kind) {
             (Some(l), MediaKind::Raw) => Some((c.path.clone(), l.clone(), edge)),

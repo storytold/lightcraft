@@ -222,6 +222,8 @@ pub const ALIASES: &[(&str, &str, &str)] = &[
     ("F7", "view.leftPanel", "{}"),
     // and F8 the right panel
     ("F8", "view.rightPanel", "{}"),
+    // Shift+Tab hides all the panels, and brings back exactly those
+    ("Shift+Tab", "view.allPanels", "{}"),
     ("Shift+M", "version.create", "{}"),
     // grid thumbnail size: Classic's key is `=`; `+` (keypad, or Shift+= reported as Plus) agrees
     ("Plus", "view.thumbSizeUp", "{}"),
@@ -389,6 +391,14 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
         return;
     }
     let (mut fire, aliased, h_press) = pressed_commands(app, ctx);
+    // Shift+Tab is also egui's "focus the previous widget", decided when the pass began and without
+    // consuming the key: with nothing focused it would put the keyboard in the last text field
+    // that took part in focus traversal. Hiding the panels must not do that.
+    // (from the fixed key, or from a saved binding of the command)
+    if aliased.iter().any(|(id, _)| *id == "view.allPanels") || fire.iter().any(|f| f == "view.allPanels") {
+        ctx.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::Tab));
+        ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+    }
     for (id, params) in aliased {
         fire_alias(app, ctx, id, params);
     }
@@ -537,6 +547,18 @@ fn fire_alias(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, params: se
         }
         return;
     }
+    // in the library grid, Space opens the active photo in Detail, as in Lightroom Classic (issue
+    // #4417); there it toggles the zoom again. Z, Toggle Zoom's own key, keeps toggling.
+    if id == "view.zoomToggle" && library_grid(app) && !app.ui.fullscreen && app.session.active().is_some() {
+        // fitted to the window, whatever the zoom was left at (it is shared with Detail)
+        app.ui.zoom = crate::state::Zoom::Fit;
+        fire_command(app, ctx, "view.detail", false);
+        return;
+    }
+    // with no photo to open, Space does nothing in the grid: the zoom (shared with Detail) stays as it is
+    if id == "view.zoomToggle" && library_grid(app) && !app.ui.fullscreen {
+        return;
+    }
     // over a tool on the photo, held Space is the view's hand; a tap toggles on its release
     if id == "view.zoomToggle" && crate::space_hand::begin(app, ctx) {
         return;
@@ -578,7 +600,7 @@ fn fire_command(app: &mut LightcraftApp, ctx: &egui::Context, f: &str, rotate_fi
         let _ = app.run(if f == "library.next" { "slideshow.next" } else { "slideshow.previous" }, json!({}));
         return;
     }
-    if fire_rating_key(app, ctx, f) || fire_grid_key(app, f) || fire_flag_key(app, ctx, f) {
+    if fire_rating_key(app, ctx, f) || fire_grid_key(app, ctx, f) || fire_flag_key(app, ctx, f) {
         return;
     }
     // in the full-screen preview (no panels) I cycles the info overlay instead
@@ -631,7 +653,7 @@ fn fire_rating_key(app: &mut LightcraftApp, ctx: &egui::Context, f: &str) -> boo
 }
 
 /// The keys of a grid or of Compare / Survey that move the active photo or the selection; whether `f` was one.
-fn fire_grid_key(app: &mut LightcraftApp, f: &str) -> bool {
+fn fire_grid_key(app: &mut LightcraftApp, ctx: &egui::Context, f: &str) -> bool {
     use crate::panels::compare;
     if f == "panel.presets" && library_grid(app) {
         // Classic's Shift+P picks and advances in Library; keep the Presets binding elsewhere.
@@ -648,8 +670,12 @@ fn fire_grid_key(app: &mut LightcraftApp, f: &str) -> bool {
         }
     } else if let Some(step) = f.strip_prefix("grid:extend:") {
         extend_selection(app, step.parse::<i64>().unwrap_or(0));
-    } else if compare::culling(app) && (f == "library.next" || f == "library.previous") {
-        let d = if f == "library.next" { 1 } else { -1 };
+    } else if compare::culling(app)
+        && (matches!(f, "library.next" | "library.previous") || (matches!(f, "library.down" | "library.up") && !over_slider(app, ctx)))
+    {
+        // ↑ / ↓ step like → / ←: run as the grid's Photo Below / Above, they would leave one photo
+        // of the survey (or the pair) selected (issue #3640)
+        let d = if matches!(f, "library.next" | "library.down") { 1 } else { -1 };
         let _ = if app.ui.view == crate::state::ViewMode::Compare { compare::compare_step(app, d) } else { compare::survey_step(app, d) };
     } else {
         return false;
@@ -804,11 +830,15 @@ fn context_key_skipped(app: &mut LightcraftApp, f: &str, rotate_fires: bool) -> 
     }
 }
 
+/// Whether the pointer is over a slider: there the arrows nudge it (`widgets::slider` takes the key), in
+/// the grids and in Survey and Compare alike.
+fn over_slider(app: &LightcraftApp, ctx: &egui::Context) -> bool {
+    ctx.pointer_hover_pos().is_some_and(|p| app.widgets.iter().any(|(id, r)| id.starts_with("slider:") && r.contains(p)))
+}
+
 /// Up / Down in the grids go to the cell above / below (the filmstrip steps one photo).
 fn up_down_key(app: &mut LightcraftApp, ctx: &egui::Context, f: &str) {
-    // over a slider the arrows nudge it (widgets::slider takes the key)
-    let over_slider = ctx.pointer_hover_pos().is_some_and(|p| app.widgets.iter().any(|(id, r)| id.starts_with("slider:") && r.contains(p)));
-    if over_slider {
+    if over_slider(app, ctx) {
         return;
     }
     match crate::panels::grid::row_distance(app, f == "library.down") {
