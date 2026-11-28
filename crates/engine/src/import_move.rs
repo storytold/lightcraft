@@ -116,10 +116,13 @@ pub(crate) fn inside(path: &Path, dir: &Path) -> bool {
 /// `path` made absolute, with symbolic links and `..` resolved, also when it doesn't exist yet:
 /// each part is followed in turn, through the links of the parts that exist, so a folder an import
 /// is about to create still lands where its existing parents' links point, and a `..` after a part
-/// that doesn't exist yet steps back from it.
+/// that doesn't exist yet steps back from it. A Windows path always comes back in its plain form
+/// (`C:\…`, `\\server\share\…`), never the `\\?\` form canonicalizing gives, so a path whose first
+/// folder exists and one whose first folder doesn't compare alike.
 pub(crate) fn resolved(path: &Path) -> PathBuf {
     let abs =
         if path.is_absolute() { path.to_path_buf() } else { std::env::current_dir().map(|d| d.join(path)).unwrap_or_else(|_| path.to_path_buf()) };
+    let abs = plain_prefix(abs);
     let mut out = PathBuf::new();
     for part in abs.components() {
         match part {
@@ -131,13 +134,37 @@ pub(crate) fn resolved(path: &Path) -> PathBuf {
                 out.push(name);
                 // (only after a name: a bare drive canonicalizes to that drive's current folder)
                 if let Ok(real) = fs::canonicalize(&out) {
-                    out = real;
+                    out = plain_prefix(real);
                 }
             }
             root => out.push(root),
         }
     }
     out
+}
+
+/// `path` as [`resolved`] gives it, in a form to compare by: letter case doesn't tell Windows paths
+/// apart, so there it is lower-cased.
+pub(crate) fn compare_key(path: &Path) -> PathBuf {
+    let r = resolved(path);
+    if cfg!(windows) { PathBuf::from(r.to_string_lossy().to_lowercase()) } else { r }
+}
+
+/// A Windows `\\?\C:\…` or `\\?\UNC\server\…` path in its plain form (`C:\…`, `\\server\…`); any
+/// other path as it is.
+fn plain_prefix(path: PathBuf) -> PathBuf {
+    if !cfg!(windows) {
+        return path;
+    }
+    let s = path.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    match s.strip_prefix(r"\\?\") {
+        // (a drive letter and a colon: other `\\?\` paths have no plain form)
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => PathBuf::from(rest),
+        _ => path,
+    }
 }
 
 pub(crate) fn is_symlink(path: &Path) -> bool {

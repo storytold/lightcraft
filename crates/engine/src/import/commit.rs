@@ -192,7 +192,7 @@ fn back_up(
     probe_hash: Option<&str>,
 ) -> Result<String, String> {
     let expect = probe_hash.and_then(lightcraft_preview::Hash128::parse);
-    let same = |a: &Path, b: &Path| crate::import_move::resolved(a) == crate::import_move::resolved(b);
+    let same = |a: &Path, b: &Path| crate::import_move::compare_key(a) == crate::import_move::compare_key(b);
     let is_source = |p: &Path| {
         same(p, Path::new(source))
             || same(p, Path::new(stored))

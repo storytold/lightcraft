@@ -677,3 +677,25 @@ fn a_backup_folder_that_cannot_be_a_backup_is_refused() {
     assert_eq!(files_under(&card), ["a.png"]);
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// A backup folder inside the destination is refused however the two are spelled: here the
+/// destination's first folder doesn't exist, and the backup reaches it through folders that do and
+/// back out with `..`. On Windows the two then resolved to different forms of the drive (`C:\` and
+/// `\?\C:\`) and passed as separate; letter case doesn't tell Windows folders apart either.
+#[test]
+fn a_backup_inside_a_destination_that_does_not_exist_yet_is_refused() {
+    use crate::import::{ImportMode, backup_folder_error};
+    let tmp = std::env::temp_dir();
+    let top = tmp.ancestors().last().unwrap().to_path_buf();
+    let absent = format!("lc-not-there-{}", std::process::id());
+    let dest = top.join(&absent).join("out");
+    assert!(!top.join(&absent).exists());
+    let up = tmp.components().count();
+    let backup = (0..up).fold(tmp.clone(), |p, _| p.join("..")).join(&absent).join("out").join("bk");
+    assert!(backup_folder_error(ImportMode::Copy, true, Some(&dest), &backup).is_some(), "{}", backup.display());
+    // the same folder in other letter case: the same folder on Windows, another one elsewhere
+    let shouted = top.join(absent.to_uppercase()).join("OUT").join("bk");
+    assert_eq!(backup_folder_error(ImportMode::Copy, true, Some(&dest), &shouted).is_some(), cfg!(windows), "{}", shouted.display());
+    // a folder beside the destination is still a backup folder
+    assert!(backup_folder_error(ImportMode::Copy, true, Some(&dest), &top.join(&absent).join("bk")).is_none());
+}

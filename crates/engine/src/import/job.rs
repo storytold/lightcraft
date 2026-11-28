@@ -179,7 +179,7 @@ pub fn backup_folder_error(mode: ImportMode, transfer: bool, root: Option<&Path>
     }
     let root = root?;
     // (also once links are resolved, for a backup folder that doesn't exist yet)
-    let (b, r) = (crate::import_move::resolved(backup), crate::import_move::resolved(root));
+    let (b, r) = (crate::import_move::compare_key(backup), crate::import_move::compare_key(root));
     (crate::import_move::inside(backup, root) || crate::import_move::inside(root, backup) || b.starts_with(&r) || r.starts_with(&b))
         .then(|| format!("the backup folder {} must be outside the destination {} and not contain it", backup.display(), root.display()))
 }
