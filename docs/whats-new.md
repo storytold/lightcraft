@@ -204,6 +204,15 @@
   Photo Grid. Populated-library launches without image arguments keep their saved view. (#3028)
 ## 2026-10-30
 
+### The pointer stays visible in the Flatpak on GNOME Wayland when its cursor theme loads by name
+- In the Flatpak on a Wayland desktop without the cursor-shape protocol (GNOME 46, for one), the mouse pointer could
+  vanish for good after Crop & Rotate or a brush hid it: the sandbox couldn't see any cursor theme. The Flatpak now
+  points at the host's cursor themes, as VectorCraft's does (issue #1657). Where the host's default theme is a
+  symlink the sandbox can't follow (Ubuntu's `/etc/alternatives`), name a theme once:
+  `flatpak override --user --env=XCURSOR_THEME=Adwaita ai.storyteller.lightcraft`, with in place of `Adwaita` any
+  cursor theme installed in `/usr/share/icons` or `~/.local/share/icons` (a theme in `~/.icons` also needs
+  `flatpak override --user --filesystem=~/.icons:ro ai.storyteller.lightcraft`).
+
 ### ↑ and ↓ keep the Survey together
 - In Survey (N) and Compare (C), ↑ and ↓ now step through the photos on screen, as → and ← do. Before, they ran the
   grid's Photo Below and Photo Above, which selected a single photo, so the survey shrank to that one photo
