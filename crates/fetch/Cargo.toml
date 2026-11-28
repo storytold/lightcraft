@@ -13,6 +13,6 @@ workspace = true
 craft-http-url = { git = "https://github.com/storytold/craft-libs", rev = "b2d2a1e948c43d95aa769d4f0a06fe6b869edc39" }
 log = { workspace = true }
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }
-rustls-rustcrypto = "0.0.2-alpha"
+rustls-rustcrypto = "0.1.0-pre.0"
 webpki-roots = "1"
 sha2 = { version = "0.10", default-features = false, features = ["std"] }

@@ -26,7 +26,7 @@ craft-geom = { git = "https://github.com/storytold/craft-libs", rev = "b2d2a1e94
 craft-mime = { git = "https://github.com/storytold/craft-libs", rev = "b2d2a1e948c43d95aa769d4f0a06fe6b869edc39", version = "0.1.0" }
 craft-gif = { git = "https://github.com/storytold/craft-libs", rev = "b2d2a1e948c43d95aa769d4f0a06fe6b869edc39", features = ["frames"] }
 craft-jxl = { git = "https://github.com/storytold/craft-libs", rev = "b2d2a1e948c43d95aa769d4f0a06fe6b869edc39", default-features = false, features = ["decode", "encode"] }
-jixel = "=0.3.4"
+jixel = "=0.5.13"
 # Photo metadata: EXIF, IPTC-IIM, XMP packets and GPX track logs (craft-libs#949)
 craft-metadata = { git = "https://github.com/storytold/craft-libs", rev = "b2d2a1e948c43d95aa769d4f0a06fe6b869edc39" }
 craft-jpeg = { git = "https://github.com/storytold/craft-libs", rev = "b2d2a1e948c43d95aa769d4f0a06fe6b869edc39" }
@@ -105,7 +105,7 @@ dhat = "0.3" # opt-in heap profiling (lightcraft-cli --features dhat-heap) and h
 # the session clock need the UTC offset in force at that instant (DST included). Native only; the
 # web build keeps its fixed clock. Zero dependencies on Unix (it reads the system tzdb); on Windows
 # it embeds one, since Windows has no canonical copy.
-jiff = { version = "0.2", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo", "tzdb-bundle-platform"] }
+jiff = { version = "1.0", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo", "tzdb-bundle-platform"] }
 
 # formats
 miniz_oxide = "0.9"
@@ -131,7 +131,7 @@ egui = { version = "0.37", default-features = false, features = ["default_fonts"
 egui_extras = { version = "0.37", default-features = false }
 eframe = { version = "0.37", default-features = false }
 egui_kittest = "0.37"
-rfd = "0.17"
+rfd = "0.18"
 muda = { version = "0.21", default-features = false } # native menu bar (macOS: objc2/AppKit, pure Rust; no GTK)
 # macOS: the profile of the screen showing the window (safe AppKit bindings; muda and wgpu use the same)
 objc2 = { version = "0.6", default-features = false, features = ["std"] }
