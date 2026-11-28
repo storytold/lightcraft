@@ -119,9 +119,12 @@ fn a_saved_no_match_smart_album_keeps_its_filters_until_explicitly_enabled() {
     let id = h
         .app
         .session
-        .execute("album.createSmart", &json!({"name": "Empty view", "rules": {
-            "rating": 1, "onlyNone": true, "ruleSet": {"match": "any", "rules": [group_at_limit]}
-        }}))
+        .execute(
+            "album.createSmart",
+            &json!({"name": "Empty view", "rules": {
+                "rating": 1, "onlyNone": true, "ruleSet": {"match": "any", "rules": [group_at_limit]}
+            }}),
+        )
         .unwrap()["id"]
         .as_u64()
         .unwrap();

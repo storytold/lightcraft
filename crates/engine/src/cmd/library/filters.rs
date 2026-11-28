@@ -60,10 +60,8 @@ pub(super) fn view_rules(s: &Session) -> lightcraft_catalog::Filter {
         Some(base) => {
             // Exactly or at most zero selects only zero. Keep the album's saved rating
             // and represent an impossible intersection explicitly instead of widening the view.
-            let no_match = s.filter.rating == 0
-                && s.filter.rating_filters()
-                && base.rating > 0
-                && base.rating_op != lightcraft_catalog::RatingOp::AtMost;
+            let no_match =
+                s.filter.rating == 0 && s.filter.rating_filters() && base.rating > 0 && base.rating_op != lightcraft_catalog::RatingOp::AtMost;
             // overlay the fields the filter bar changed
             let cur = serde_json::to_value(&s.filter).unwrap_or_default();
             let def = serde_json::to_value(Filter::default()).unwrap_or_default();
