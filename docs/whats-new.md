@@ -1,6 +1,29 @@
 # What's new in LightCraft
 
+## 2026-10-29
+
+### Select by a single star rating
+- Edit ▸ Select by now lists each rating on its own (★ only through ★★★★★ only) below the “and higher” rows,
+  next to Unrated. Choosing ★★★ only selects the photos in view rated exactly three stars, where before the menu
+  could only select three stars and up (#3311).
+
 ## Unreleased
+
+### Space opens a photo from the grid
+- In the Grid and the Square Grid, Space opens the active photo in Detail, fitted to the window, as in Lightroom
+  Classic (issue #4417). There, Space toggles the zoom as before.
+
+### Face suggestions match the same person more often
+- Each face is now read both as it is and mirrored, and the two are averaged before it is compared with the faces you
+  have named. On the LFW benchmark with AuraFace, about 1 in 6 of a person's photos that used to miss the match bar now
+  reach it, and more for small faces in group photos, with no more strangers matched (issue #1920). Recognising a face takes about
+  twice as long, and the faces already scanned are scanned once more, in the background.
+
+### Pressing at the search box's edge no longer moves the window
+- On macOS the top bar is the window's title bar, and the search box's padding around its text still belonged to
+  it: a press there, where a text selection often starts, dragged the whole window instead. The whole box is now
+  the search field's. A click anywhere in it puts the cursor in the field, and only the bar's empty space moves the
+  window (#2807).
 
 ### Export subfolder variables
 - The Export dialog's Subfolder field now supports `{album}` (active album name sanitized for filesystem safety, empty outside an album view), `{date}` (batch export date in `YYYYMMDD`, local time), and `{hour}` (batch export time in `HHMM`, local time). An **Insert…** dropdown next to the field inserts tokens at the cursor. Tokens are stored in presets and expanded at export time, so the same preset produces dated subfolders on every use.
@@ -184,6 +207,20 @@
   the selected image in Detail after the asynchronous import completes. Grid and Last continue to open launch files in
   Photo Grid. Populated-library launches without image arguments keep their saved view. (#3028)
 ## 2026-10-30
+
+### The pointer stays visible in the Flatpak on GNOME Wayland when its cursor theme loads by name
+- In the Flatpak on a Wayland desktop without the cursor-shape protocol (GNOME 46, for one), the mouse pointer could
+  vanish for good after Crop & Rotate or a brush hid it: the sandbox couldn't see any cursor theme. The Flatpak now
+  points at the host's cursor themes, as VectorCraft's does (issue #1657). Where the host's default theme is a
+  symlink the sandbox can't follow (Ubuntu's `/etc/alternatives`), name a theme once:
+  `flatpak override --user --env=XCURSOR_THEME=Adwaita ai.storyteller.lightcraft`, with in place of `Adwaita` any
+  cursor theme installed in `/usr/share/icons` or `~/.local/share/icons` (a theme in `~/.icons` also needs
+  `flatpak override --user --filesystem=~/.icons:ro ai.storyteller.lightcraft`).
+
+### ↑ and ↓ keep the Survey together
+- In Survey (N) and Compare (C), ↑ and ↓ now step through the photos on screen, as → and ← do. Before, they ran the
+  grid's Photo Below and Photo Above, which selected a single photo, so the survey shrank to that one photo
+  (issue #3640).
 
 ### Lightroom catalogs with a print inside a collection import their collections
 - Lightroom Classic can keep a saved print, book, slideshow or web gallery inside a plain collection, but a
@@ -427,6 +464,21 @@
 
 ## 2026-10-25
 
+### Import from Folder… offers the photos you browsed in Local
+- A folder you browsed in Local no longer shows its photos as "In library" and out of reach in the Import review:
+  they are offered, checked, and importing them brings the browsed photos (with their edits) into the library where
+  they are. Copy and Move still leave them out, since they can't be copied from where they already are, and the
+  review says keywords and presets apply to new files only when they are set for such photos.
+- A copy you only browsed in Local (another path with the same content) no longer makes the import report "already in
+  the library", even after the library photo was permanently deleted and the library reopened, and a library photo
+  with the same content is matched before a browsed copy is promoted. Several browsed copies of one file import once.
+- Files with the same content as a browsed photo are listed as identical copies in the folder, not as already in the
+  library, which doesn't have them. With Copy or Move, which leave the browsed photo out, the first of those files
+  that isn't browsed itself is offered and checked instead, so that content can still be copied in from the folder.
+- A browsed file that another application replaced since (its size on disk is no longer the one that was browsed) is
+  read again: it is compared with the library by what it is now, and importing it brings its record up to date (size,
+  dimensions, content) as it joins the library.
+
 ### A one-field white balance edit no longer shifts the other one
 - Settings that name only a white balance temperature, or only a tint — `develop.merge`,
   `lightcraft-cli render --settings <partial JSON>`, an MCP `set_develop {settings: …}` call, or a hand-written
@@ -477,6 +529,12 @@
   During a mask drag or a brush stroke, hovering shows no overlay; an overlay switched on with O, or a mask without
   settings, keeps showing what it selects. While an Object click or a description is still being computed, no stand-in
   overlay shows.
+### Color Mixer: HSL
+- **Color Mixer: HSL**, laid out as in Lightroom Classic: **Mixer | Point Color** tabs, then
+  **Adjust: HSL / Color**. HSL shows **Hue, Saturation, Luminance** or **All** (the three stacked,
+  each with its heading): eight colour sliders each, with coloured tracks, and a targeted
+  adjustment per group. HSL is the default and your choice is remembered. Point Color is now the
+  Color Mixer's second tab.
 ### Import rename numbering stops safely at its limit
 - Copy and Move imports can use the last representable rename number once. If more renamed files remain, each is
   reported as failed with guidance to lower `renameStart` or leave `rename` blank; completed transfers stay

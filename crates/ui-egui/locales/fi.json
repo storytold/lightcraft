@@ -2432,6 +2432,7 @@
   "Folder name": "Kansion nimi",
   "Its templates move to User Templates.": "Sen mallipohjat siirretään kansioon Käyttäjän mallipohjat.",
   "Stopped at the scan limit: there may be more photos": "Skannauksen raja saavutettiin: valokuvia voi olla lisää",
+  "Keywords and presets apply to new files only, not to photos already in Local": "Avainsanat ja esiasetukset koskevat vain uusia tiedostoja, eivät kuvia, jotka ovat jo Paikallisessa",
   "This album is in a loop, so it shows nothing": "Tämä albumi on silmukassa, joten se ei näytä mitään",
   "It tests itself: change its rules (Edit Smart Album…)": "Se testaa itseään: muuta sen sääntöjä (Muokkaa älyalbumia…)",
   "Filter settings": "Suodata asetuksia",
