@@ -4,9 +4,11 @@
 mod accessibility;
 mod dialog_role;
 mod docking_workflows;
+mod export_dropdown_keys;
 mod grid_names;
 mod landmarks;
 mod local_places;
 mod photo_name;
+mod sidebar_branch;
 mod sidebar_names;
 mod thumb_size_slider;

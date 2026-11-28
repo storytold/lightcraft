@@ -16,9 +16,7 @@ fn err(e: impl std::fmt::Display) -> Error {
 }
 
 pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
-    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") && bytes.get(12..16) == Some(b"IHDR") && bytes.len() >= 24 {
-        let w = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
-        let h = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+    if let Some((w, h)) = craft_image_codecs::png_probe::declared_dimensions(bytes) {
         check_size(F, w as u64, h as u64, opts)?;
     }
     let ic_opts = craft_image_codecs::DecodeOptions {
@@ -52,106 +50,24 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
     finish(F, raw, meta, (w, h), opts)
 }
 
-/// Stored dimensions and EXIF orientation (`eXIf`, wherever it is) from the chunk headers, without
-/// inflating the image data. Refused, as a decode would refuse it: an invalid IHDR, an indexed
-/// image without a palette, no IDAT, or a file that ends before the chunk after the last IDAT
-/// begins (truncated image data). Chunk CRCs and the deflate stream are not checked.
+/// Stored dimensions and EXIF orientation without inflating pixels.
 pub(crate) fn header(b: &[u8]) -> Result<(u32, u32, u16)> {
-    if !b.starts_with(b"\x89PNG\r\n\x1a\n") {
-        return Err(err("bad signature"));
-    }
-    let be32 = |p: usize| b.get(p..p.checked_add(4)?).map(|v| u32::from_be_bytes([v[0], v[1], v[2], v[3]]));
-    if be32(8) != Some(13) || b.get(12..16) != Some(b"IHDR") {
-        return Err(err("missing IHDR"));
-    }
-    let ihdr = b.get(16..29).ok_or_else(|| err("truncated IHDR"))?;
-    let (w, h) = (u32::from_be_bytes([ihdr[0], ihdr[1], ihdr[2], ihdr[3]]), u32::from_be_bytes([ihdr[4], ihdr[5], ihdr[6], ihdr[7]]));
-    let (depth, color, compression, filter, interlace) = (ihdr[8], ihdr[9], ihdr[10], ihdr[11], ihdr[12]);
-    if w > i32::MAX as u32 || h > i32::MAX as u32 {
-        return Err(err("dimensions out of range"));
-    }
-    check_size(F, w as u64, h as u64, &DecodeOptions::default())?;
-    let depth_ok = match color {
-        0 => matches!(depth, 1 | 2 | 4 | 8 | 16),
-        3 => matches!(depth, 1 | 2 | 4 | 8),
-        2 | 4 | 6 => matches!(depth, 8 | 16),
-        _ => false,
-    };
-    if !depth_ok || compression != 0 || filter != 0 || interlace > 1 {
-        return Err(err("invalid IHDR"));
-    }
-    let (mut p, mut palette, mut idat, mut after_idat, mut exif) = (8usize, false, false, false, None);
-    while let Some(len) = be32(p) {
-        let Some(kind) = p.checked_add(4).and_then(|k| b.get(k..k.checked_add(4)?)) else { break };
-        if idat && kind != b"IDAT" {
-            // a chunk follows the image data: the IDAT run is complete
-            after_idat = true;
-        }
-        if kind == b"IEND" {
-            break;
-        }
-        let start = p.saturating_add(8);
-        let data = (len <= i32::MAX as u32).then(|| start.checked_add(len as usize).and_then(|end| b.get(start..end))).flatten();
-        let Some(data) = data else {
-            if after_idat {
-                break; // a damaged chunk after the image data: a decode ignores it too
+    let (w, h, orientation) =
+        craft_image_codecs::png_probe::header_with_max_pixels(b, DecodeOptions::default().max_pixels).map_err(|error| match error {
+            craft_image_codecs::CodecError::LimitExceeded(_) => {
+                let (w, h) = craft_image_codecs::png_probe::declared_dimensions(b).unwrap_or((0, 0));
+                Error::TooLarge(w as u64, h as u64)
             }
-            return Err(err("truncated"));
-        };
-        match kind {
-            b"PLTE" => palette = true,
-            b"IDAT" if after_idat => {} // a stray IDAT after other chunks: the first run is the image
-            b"IDAT" => {
-                if color == 3 && !palette {
-                    return Err(err("indexed image without a palette"));
-                }
-                idat = true;
-            }
-            b"eXIf" if exif.is_none() => exif = Some(data.strip_prefix(b"Exif\0\0").unwrap_or(data)),
-            _ => {}
-        }
-        p = start.saturating_add(data.len()).saturating_add(4);
-    }
-    if !idat {
-        return Err(err("no image data"));
-    }
-    if !after_idat {
-        return Err(err("truncated image data"));
-    }
-    Ok((w, h, exif.map(crate::exif::summarize).unwrap_or_default().orientation.unwrap_or(1)))
+            other => err(other),
+        })?;
+    Ok((w, h, orientation))
 }
 
 fn container_hint_from_chunks(b: &[u8]) -> Option<SourceSpace> {
-    if !b.starts_with(b"\x89PNG\r\n\x1a\n") {
-        return None;
-    }
-    let mut has_srgb = false;
-    let mut gamma: Option<f32> = None;
-    let mut chrm: Option<[f64; 8]> = None;
-    let mut p = 8usize;
-    while let Some(len_bytes) = b.get(p..p + 4) {
-        let len = u32::from_be_bytes([len_bytes[0], len_bytes[1], len_bytes[2], len_bytes[3]]) as usize;
-        let Some(kind) = b.get(p + 4..p + 8) else { break };
-        let Some(payload) = b.get(p + 8..p + 8 + len) else { break };
-        if kind == b"sRGB" {
-            has_srgb = true;
-        } else if kind == b"gAMA" && payload.len() == 4 {
-            let v = u32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]]) as f32 / 100_000.0;
-            if v > 0.0 && v.is_finite() {
-                gamma = Some(v);
-            }
-        } else if kind == b"cHRM" && payload.len() == 32 {
-            let mut vals = [0.0f64; 8];
-            for (i, dst) in vals.iter_mut().enumerate() {
-                let raw = i32::from_be_bytes([payload[i * 4], payload[i * 4 + 1], payload[i * 4 + 2], payload[i * 4 + 3]]);
-                *dst = raw as f64 / 100_000.0;
-            }
-            chrm = Some(vals);
-        } else if kind == b"IDAT" || kind == b"IEND" {
-            break;
-        }
-        p = p.saturating_add(12).saturating_add(len);
-    }
+    let chunks = craft_image_codecs::png_probe::color_chunks(b)?;
+    let has_srgb = chunks.srgb;
+    let gamma = chunks.gamma;
+    let chrm = chunks.chromaticities;
     if has_srgb {
         return Some(SourceSpace::named(NamedSpace::Srgb, SpaceOrigin::Container));
     }
@@ -189,6 +105,50 @@ fn rgb_to_xyz_d50_checked(space: &RgbSpace) -> Option<Mat3> {
 #[cfg(test)]
 mod tests {
     use crate::DecodeOptions;
+
+    /// An IFD0 with two Orientation entries (1, then 6): `read_header` and `decode` read it with
+    /// the same reader, so they agree on the orientation.
+    #[test]
+    fn header_and_decode_agree_on_conflicting_orientation_entries() {
+        let image = craft_image_codecs::Image::from_u8(2, 3, craft_image_codecs::ChannelLayout::Gray, vec![0; 6]).unwrap();
+        let base = craft_image_codecs::encode(&image, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
+        let mut exif = b"II*\0\x08\0\0\0\x02\0".to_vec();
+        for value in [1u16, 6] {
+            exif.extend_from_slice(&0x0112u16.to_le_bytes());
+            exif.extend_from_slice(&3u16.to_le_bytes());
+            exif.extend_from_slice(&1u32.to_le_bytes());
+            exif.extend_from_slice(&value.to_le_bytes());
+            exif.extend_from_slice(&[0, 0]);
+        }
+        exif.extend_from_slice(&0u32.to_le_bytes());
+        let mut png = base.clone();
+        let iend = png.len() - 12;
+        png.splice(iend..iend, png_chunk(*b"eXIf", &exif));
+        let header = crate::read_header(&png).unwrap();
+        let decoded = crate::decode(&png, DecodeOptions::default()).unwrap();
+        assert_eq!((header.width, header.height), (2, 3));
+        assert_eq!(header.orientation, decoded.orientation);
+    }
+
+    #[test]
+    fn exif_orientation_mutation_parity() {
+        let image = craft_image_codecs::Image::from_u8(1, 1, craft_image_codecs::ChannelLayout::Gray, vec![0]).unwrap();
+        let base = craft_image_codecs::encode(&image, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
+        let exif = crate::exif::minimal_exif(6);
+        for at in 0..exif.len() {
+            for value in [0, 255] {
+                let mut data = exif.clone();
+                data[at] = value;
+                let mut png = base.clone();
+                let iend = png.len() - 12;
+                png.splice(iend..iend, png_chunk(*b"eXIf", &data));
+                let old = crate::exif::legacy_reference(&data);
+                let shared = crate::exif::summarize(&data);
+                assert_eq!((shared.orientation, shared.thumbnail, shared.adobe_rgb_hint), (old.orientation, old.thumbnail, old.adobe_rgb_hint));
+                assert_eq!(super::header(&png).unwrap().2, old.orientation.unwrap_or(1), "at {at}, value {value}");
+            }
+        }
+    }
 
     /// A compressed text chunk is expanded by `png` through our own cap: an XMP document
     /// bigger than it is dropped, not inflated. Compressing an 8 MiB string is a few

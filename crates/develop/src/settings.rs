@@ -102,12 +102,40 @@ pub enum Process {
     /// V7, with the Highlights/Shadows base taken of log luminance without its fine detail (clamped
     /// between a fine and a 3× wider median), so gaps in dark lettering aren't lifted into bright blocks.
     V8,
+    /// V8, with the checked Bradford white-balance fallback (`Mat3::IDENTITY` when a source
+    /// illuminant's Bradford blue cone response is `<= 0.0`, `craft-libs#587`).
+    /// `ProcessVersion(9)` names no process: a saved 9 renders as V8.
+    V10,
+    /// V10, calibrated against Lightroom exports of real edits: global Shadows answers large amounts
+    /// compressively (`lightcraft_pipeline::finish::tone_slider`), a negative Texture smooths less
+    /// (`finish::texture_slider`) and the Global grading wheel tints less (`colorops::global_wheel`).
+    /// `ProcessVersion(11)` and `ProcessVersion(12)` name no process here (12 is left to the open claim
+    /// of #4047): a saved 11 or 12 renders as V10.
+    V13,
+    /// V13, with Heal and Remove spots pinned to the photo on the spot's edge: the correction is a
+    /// membrane fill of the log ratio of photo to source, the source's fine detail is matched to its
+    /// surroundings, and every spot reads its source at whole pixels
+    /// (`lightcraft_pipeline::spots::HealMethod`).
+    V14,
 }
 
 impl Process {
-    /// Every process, oldest first.
-    pub const ALL: [Process; 8] = [Process::V1, Process::V2, Process::V3, Process::V4, Process::V5, Process::V6, Process::V7, Process::V8];
-    pub const LATEST: Process = Process::V8;
+    /// Every process, oldest first (`ProcessVersion(9)` names none and renders as V8; 11 and 12 name none and
+    /// render as V10, 12 being claimed by an open pull request).
+    pub const ALL: [Process; 11] = [
+        Process::V1,
+        Process::V2,
+        Process::V3,
+        Process::V4,
+        Process::V5,
+        Process::V6,
+        Process::V7,
+        Process::V8,
+        Process::V10,
+        Process::V13,
+        Process::V14,
+    ];
+    pub const LATEST: Process = Process::V14;
 
     pub const fn version(self) -> ProcessVersion {
         match self {
@@ -119,6 +147,9 @@ impl Process {
             Process::V6 => ProcessVersion(6),
             Process::V7 => ProcessVersion(7),
             Process::V8 => ProcessVersion(8),
+            Process::V10 => ProcessVersion(10),
+            Process::V13 => ProcessVersion(13),
+            Process::V14 => ProcessVersion(14),
         }
     }
 }
@@ -697,6 +728,18 @@ pub struct Optics {
     /// automatic estimate when `remove_ca` is on.
     pub ca_red: f64,
     pub ca_blue: f64,
+    /// AI Defringe's Amount, 0..100 (docs/ai-defringe.md).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub ai_defringe: f64,
+    /// Whether AI Defringe is on (`None`: on when its Amount is above 0).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai_defringe_on: Option<bool>,
+}
+
+impl Optics {
+    pub fn ai_defringe_enabled(&self) -> bool {
+        self.ai_defringe_on.unwrap_or(self.ai_defringe > 0.0)
+    }
 }
 
 impl Default for Optics {
@@ -717,6 +760,8 @@ impl Default for Optics {
             vignetting_midpoint: 50.0,
             ca_red: 0.0,
             ca_blue: 0.0,
+            ai_defringe: 0.0,
+            ai_defringe_on: None,
         }
     }
 }

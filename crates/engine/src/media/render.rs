@@ -45,6 +45,9 @@ pub struct RenderJob {
     /// to a 64 px step) and the window would otherwise shrink the texture with 2-tap bilinear sampling, which blurs fine detail at
     /// small ratios and aliases it at large ones. The caches keep the full render.
     pub display_fit: Option<(usize, usize)>,
+    /// AI Defringe's correction of the source picture ([`crate::aidefringe`]), when it is on and the photo has one
+    /// (or, for an export, will make one).
+    pub ai_defringe: Option<crate::aidefringe::ForRender>,
 }
 
 /// `img` shrunk to fit `max_w × max_h` with a Lanczos filter (see [`RenderJob::display_fit`]).
@@ -91,6 +94,9 @@ pub struct RenderResult {
     /// The result as a texture on the window's GPU device ([`RenderJob::on_screen`]); `rendered`
     /// then holds its histogram and an empty image.
     pub frame: Option<ScreenFrame>,
+    /// A slide job's result: the size in pixels of the photo's render the slide was composed
+    /// from, which sets where the slide's layout put the photo ([`RenderJob::with_slide`]).
+    pub slide_photo: Option<[usize; 2]>,
 }
 
 impl RenderJob {
@@ -216,6 +222,7 @@ impl RenderJob {
             quick: None,
             display: None,
             frame: None,
+            slide_photo: None,
         }
     }
 
@@ -235,6 +242,7 @@ impl RenderJob {
         let slide = self.slide.clone();
         let mut r = self.run_photo();
         if let (Some(slide), Ok(rendered)) = (slide, r.rendered.as_mut()) {
+            r.slide_photo = Some([rendered.image.width, rendered.image.height]);
             rendered.image = slide.compose(&rendered.image);
             rendered.deep = None;
         }
@@ -291,6 +299,7 @@ impl RenderJob {
                 quick: Some(QuickSource::Cached),
                 display: None,
                 frame: None,
+                slide_photo: None,
             };
         }
         if let Some((cache, key)) = &self.cache
@@ -310,6 +319,7 @@ impl RenderJob {
                 quick: None,
                 display: None,
                 frame: None,
+                slide_photo: None,
             };
         }
         // a face tile of an unedited raw: cut from the camera's embedded preview when it is big enough
@@ -331,6 +341,7 @@ impl RenderJob {
                 quick: None,
                 display: None,
                 frame: None,
+                slide_photo: None,
             };
         }
         let was_loaded = matches!(self.source, SourceRef::Loaded(_));
@@ -345,6 +356,15 @@ impl RenderJob {
             Ok(source) => {
                 // the plain picture, or (Denoise amount above 0 and a denoised picture cached) the mix the amount asks for
                 let src = &source.image_for(self.settings.denoise_amount());
+                // …with AI Defringe's correction
+                let corrected = match &self.ai_defringe {
+                    Some(a) => match a.apply(src) {
+                        Ok(img) => Some(img),
+                        Err(e) => return self.failed(e),
+                    },
+                    None => None,
+                };
+                let src = corrected.as_ref().unwrap_or(src);
                 let info = source.info_or(self.info);
                 // Views and exports use the GPU when there is one (waiting for the device if it is
                 // still being created). Thumbnails (grid, filmstrip, preset and profile previews)
@@ -369,6 +389,7 @@ impl RenderJob {
                         quick: None,
                         display: None,
                         frame: None,
+                        slide_photo: None,
                     };
                 }
                 let pixels_needed =
@@ -393,6 +414,7 @@ impl RenderJob {
                             quick: None,
                             display: None,
                             frame: Some(frame),
+                            slide_photo: None,
                         };
                     }
                     Some(OnScreen::Pixels(r)) => (r, None),
@@ -453,6 +475,7 @@ impl RenderJob {
                     quick: None,
                     display,
                     frame: None,
+                    slide_photo: None,
                 }
             }
             Err(e) => self.failed(e),
