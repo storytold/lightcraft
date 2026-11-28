@@ -48,6 +48,7 @@ mod drop_import;
 mod edit_layout;
 mod empty_library;
 mod error_kinds;
+mod export_dropdowns;
 mod filmstrip;
 mod filmstrip_drag;
 mod find_similar;
