@@ -1042,19 +1042,8 @@ fn smart_rules_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg:
     );
     crate::widgets::register(ui, "field:smartName", r.rect);
     ui.add_space(6.0);
-    if let Some(mut saved) = no_match_album(app, *id).cloned() {
-        let allow = ui.checkbox(allow_matching, crate::i18n::tr("Allow saved rules to match photos"));
-        crate::widgets::register(ui, "field:smartAllowMatching", allow.rect);
-        let preview = if *allow_matching {
-            saved.only_none = false;
-            let n = smart_filter_preview_count(app, &saved);
-            crate::i18n::tr_format!("{n} photo{} match · updates automatically as photos change", if n == 1 { "" } else { "s" }, n = n)
-        } else {
-            crate::i18n::tr("Only 0 photos").to_string()
-        };
-        // Keep one live node across both states: the screen reader gets changed text without moving focus.
-        let status = ui.push_id("smartRulesMatchStatus", |ui| ui.label(preview)).inner;
-        ui.ctx().accesskit_node_builder(status.id, |node| node.set_live(egui::accesskit::Live::Polite));
+    if let Some(saved) = no_match_album(app, *id).cloned() {
+        smart_rules_no_match_body(app, ui, allow_matching, saved);
         return;
     }
     // the folder an album made from a folder view carries is not in the editor, but it counts
@@ -1070,20 +1059,31 @@ fn smart_rules_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg:
     egui::ScrollArea::vertical().max_height(list_height(ui, 360.0)).auto_shrink([false, true]).show(ui, |ui| {
         crate::panels::rules_editor::edit(ui, rules, "rules", 0, &[], &env);
     });
-    let n = view.count;
     ui.add_space(4.0);
     if view.problems.is_empty() {
-        ui.label(
-            egui::RichText::new(crate::i18n::tr_format!(
-                "{n} photo{} match · updates automatically as photos change",
-                if n == 1 { "" } else { "s" },
-                n = n
-            ))
-            .color(t.text_dim),
-        );
+        ui.label(egui::RichText::new(smart_rules_match_text(view.count)).color(t.text_dim));
     } else {
         ui.label(egui::RichText::new(crate::i18n::tr("Fix the marked rules to save this album.")).color(t.caution));
     }
+}
+
+/// The existing rules are read-only while editing a no-match album's matching behavior.
+fn smart_rules_no_match_body(app: &mut LightcraftApp, ui: &mut egui::Ui, allow_matching: &mut bool, mut saved: lightcraft_catalog::Filter) {
+    let allow = ui.checkbox(allow_matching, crate::i18n::tr("Allow saved rules to match photos"));
+    crate::widgets::register(ui, "field:smartAllowMatching", allow.rect);
+    let preview = if *allow_matching {
+        saved.only_none = false;
+        smart_rules_match_text(smart_filter_preview_count(app, &saved))
+    } else {
+        crate::i18n::tr("Only 0 photos").to_string()
+    };
+    // Keep one live node across both states: the screen reader gets changed text without moving focus.
+    let status = ui.push_id("smartRulesMatchStatus", |ui| ui.label(preview)).inner;
+    ui.ctx().accesskit_node_builder(status.id, |node| node.set_live(egui::accesskit::Live::Polite));
+}
+
+fn smart_rules_match_text(n: usize) -> String {
+    crate::i18n::tr_format!("{n} photo{} match · updates automatically as photos change", if n == 1 { "" } else { "s" }, n = n)
 }
 
 fn smart_filter_preview_count(app: &mut LightcraftApp, rules: &lightcraft_catalog::Filter) -> usize {
