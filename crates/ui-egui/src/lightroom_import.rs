@@ -304,17 +304,62 @@ fn terminal(app: &mut LightcraftApp, ctx: &egui::Context, task: &LightroomTask, 
         }
     };
     if matches!(kind, Kind::Import) && value.get("cancelled") != Some(&Value::Bool(true)) {
-        app.lightroom_result = Some(result_dialog(&value, &message, &app.session.catalog));
+        app.lightroom_results.push(result_dialog(&value, &message, &app.session.catalog));
         show_result(app);
     }
+    let imported = matches!(kind, Kind::Import) && value.get("cancelled") != Some(&Value::Bool(true)) && value.get("error").is_none();
     app.lightroom_last = Some(value);
     app.lightroom = None;
     app.toast_for(ctx, message, 6.0);
+    // several catalogs chosen: the next one merges into the library this one went into; a cancelled or failed
+    // import, or another library open by now, ends the batch. Only the end of the import the batch follows moves it.
+    let batch = if matches!(kind, Kind::Import) { app.lightroom_queue.take_if(|b| std::path::Path::new(&b.after) == task.path) } else { None };
+    if let Some(batch) = batch.filter(|_| imported) {
+        if batch.library != app.session.library_generation() {
+            app.toast_for(ctx, crate::i18n::tr("Another library was opened: the other Lightroom catalogs were not imported").to_string(), 6.0);
+        } else if let Some((next, rest)) = batch.rest.split_first() {
+            let req = crate::lightroom_destination::Request { into: Some(crate::lightroom_destination::Destination::Open), ..Default::default() };
+            if let Err(e) = import_batch(app, next, rest, &req) {
+                app.toast_for(ctx, crate::i18n::tr_format!("{next} was not imported: {e}", next = next, e = e), 6.0);
+            }
+        }
+    }
+}
+
+/// Catalogs chosen together, waiting for the import of `after` to end: then the first of `rest` is imported into
+/// the library `after` went into (`library`, its generation), followed by the others.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Batch {
+    pub after: String,
+    pub library: u64,
+    pub rest: Vec<String>,
+}
+
+/// Import `first` as `req` says and the `rest` after it, one by one into the same library: once `first`'s import
+/// starts they wait for it ([`Batch`]); while its destination window asks, the window keeps them, and closing it
+/// drops them. A refused request changes no batch.
+pub(crate) fn import_batch(
+    app: &mut LightcraftApp,
+    first: &str,
+    rest: &[String],
+    req: &crate::lightroom_destination::Request,
+) -> Result<Value, String> {
+    let r = crate::lightroom_destination::import(app, first, req)?;
+    if !rest.is_empty() {
+        if app.lightroom.as_ref().is_some_and(|t| t.path == std::path::Path::new(first)) {
+            app.lightroom_queue = Some(Batch { after: first.to_string(), library: app.session.library_generation(), rest: rest.to_vec() });
+        } else if let Some(crate::state::Dialog::LightroomDestination { catalog, then, .. }) = app.ui.dialog.as_mut()
+            && catalog == first
+        {
+            *then = rest.to_vec();
+        }
+    }
+    Ok(r)
 }
 
 fn show_result(app: &mut LightcraftApp) {
-    if app.ui.dialog.is_none() {
-        app.ui.dialog = app.lightroom_result.take();
+    if app.ui.dialog.is_none() && !app.lightroom_results.is_empty() {
+        app.ui.dialog = Some(app.lightroom_results.remove(0));
     }
 }
 
@@ -586,6 +631,65 @@ mod tests {
         h
     }
 
+    /// Several catalogs chosen (`file.importLightroom {paths}`): when one import ends, the next catalog starts,
+    /// merging into the library the first went into.
+    #[test]
+    fn the_next_chosen_catalog_starts_when_an_import_ends() {
+        let dir = std::env::temp_dir().join(format!("lc-ui-lrqueue-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let next = dir.join("Second.lrcat");
+        std::fs::write(&next, b"not really SQLite").unwrap();
+        let mut session = lightcraft_engine::Session::new().with_fs();
+        session.open_library(dir.join("Library"), false).unwrap();
+        let app = crate::LightcraftApp::new(session, crate::Services { png: None, ..Default::default() });
+        let mut h = crate::headless::Headless::new(app, [1200.0, 800.0], 1.0);
+        h.step();
+        let (task, tx, _, _) = fake_import(&h);
+        h.app.lightroom = Some(task);
+        let library = h.app.session.library_generation();
+        h.app.lightroom_queue = Some(Batch { after: "fixture.lrcat".into(), library, rest: vec![next.to_string_lossy().into_owned()] });
+        tx.send(Message::Finalized(Ok(()))).unwrap();
+        h.step();
+        assert!(h.app.lightroom_queue.is_none(), "the queued catalog was taken");
+        assert!(h.app.lightroom.as_ref().is_some_and(|t| t.path == next), "the queued catalog is importing");
+        assert!(h.step_until(std::time::Duration::from_secs(20), |h| h.app.lightroom.is_none()), "its import never ended");
+        let last = h.app.lightroom_last.clone().unwrap_or_default();
+        assert_eq!(last["path"], serde_json::json!(next.to_string_lossy()), "{last}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// While a batch's destination window asks, another import that succeeds (started elsewhere: an agent, the
+    /// control channel) starts none of the catalogs waiting in the window.
+    #[test]
+    fn another_import_ending_starts_none_of_an_unconfirmed_batch() {
+        let dir = std::env::temp_dir().join(format!("lc-ui-lrunconfirmed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (first, second) = (dir.join("First.lrcat"), dir.join("Second.lrcat"));
+        for c in [&first, &second] {
+            std::fs::write(c, b"not really SQLite").unwrap();
+        }
+        let (first, second) = (first.to_string_lossy().into_owned(), second.to_string_lossy().into_owned());
+        let mut session = lightcraft_engine::Session::new().with_fs();
+        session.open_library(dir.join("Library"), false).unwrap();
+        let app = crate::LightcraftApp::new(session, crate::Services { png: None, ..Default::default() });
+        let mut h = crate::headless::Headless::new(app, [1200.0, 800.0], 1.0);
+        h.step();
+        assert_eq!(h.app.run("file.importLightroom", json!({"paths": [first, second.clone()]})).unwrap()["asking"], true);
+        let (task, tx, _, _) = fake_import(&h);
+        h.app.lightroom = Some(task);
+        tx.send(Message::Finalized(Ok(()))).unwrap();
+        h.step();
+        assert!(h.app.lightroom.is_none() && h.app.lightroom_queue.is_none(), "nothing of the waiting batch started");
+        assert!(
+            matches!(&h.app.ui.dialog, Some(crate::state::Dialog::LightroomDestination { then, .. }) if *then == vec![second]),
+            "the window still asks, with the rest: {:?}",
+            h.app.ui.dialog
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn lightroom_row_is_not_cancellable_while_committing() {
         let mut h = demo();
@@ -733,11 +837,37 @@ mod tests {
         let (task, _tx, _, _) = fake_import(&h);
         terminal(&mut h.app, &h.view.ctx, &task, json!({"error": "catalog could not be read"}));
         assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::About)));
-        assert!(h.app.lightroom_result.is_some());
+        assert_eq!(h.app.lightroom_results.len(), 1);
         h.app.ui.dialog = None;
         tick(&mut h.app, &h.view.ctx);
         assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::LightroomResult { .. })));
-        assert!(h.app.lightroom_result.is_none());
+        assert!(h.app.lightroom_results.is_empty());
+    }
+
+    /// The catalogs of a batch finish one after another while the first result is still open: each keeps its own
+    /// result, shown in turn.
+    #[test]
+    fn every_finished_import_keeps_its_result() {
+        let mut h = demo();
+        let summary = |h: &crate::headless::Headless| match &h.app.ui.dialog {
+            Some(crate::state::Dialog::LightroomResult { summary, .. }) => summary.clone(),
+            other => panic!("no result window: {other:?}"),
+        };
+        for error in ["first catalog damaged", "second catalog damaged", "third catalog damaged"] {
+            let (task, _tx, _, _) = fake_import(&h);
+            terminal(&mut h.app, &h.view.ctx, &task, json!({"error": error}));
+        }
+        let mut seen = Vec::new();
+        for _ in 0..3 {
+            tick(&mut h.app, &h.view.ctx);
+            seen.push(summary(&h));
+            h.app.ui.dialog = None;
+        }
+        for (shown, error) in seen.iter().zip(["first catalog damaged", "second catalog damaged", "third catalog damaged"]) {
+            assert!(shown.contains(error), "{shown} should be about {error}");
+        }
+        tick(&mut h.app, &h.view.ctx);
+        assert!(h.app.ui.dialog.is_none() && h.app.lightroom_results.is_empty());
     }
 
     #[test]

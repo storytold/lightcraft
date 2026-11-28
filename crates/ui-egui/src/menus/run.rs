@@ -1504,22 +1504,26 @@ fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
                 Ok(req) => req,
                 Err(e) => return Some(Err(e)),
             };
-            let path = match p.get("path").and_then(Value::as_str).map(str::to_string) {
-                Some(path) => Some(path),
-                None => {
-                    let req = PickRequest::file(
-                        crate::i18n::tr("Import Lightroom Catalog"),
+            // `paths` (or several chosen in the dialog): imported one after another into the library the first one
+            // goes into, so two catalogs merge into one library
+            let paths: Vec<String> = match (p.get("paths").and_then(Value::as_array), p.get("path").and_then(Value::as_str)) {
+                (Some(list), _) => list.iter().filter_map(|v| v.as_str().map(str::to_string)).collect(),
+                (None, Some(path)) => vec![path.to_string()],
+                (None, None) => {
+                    let req = PickRequest::files(
+                        Some(crate::i18n::tr("Import Lightroom Catalog").into()),
                         crate::i18n::tr("Lightroom Classic Catalog"),
                         &["lrcat", "zip"],
                     );
-                    match crate::pick::ask(app, id, p, "path", req, |s| s.pick_lightroom_catalog.as_mut().and_then(|f| f()).map(|x| vec![x])) {
-                        Picked::Now(v) => v.into_iter().next(),
-                        Picked::Later | Picked::Unavailable => None,
+                    // (the dialog's answer comes back under `paths`: a list)
+                    match crate::pick::ask(app, id, p, "paths", req, |s| s.pick_lightroom_catalog.as_mut().and_then(|f| f()).map(|x| vec![x])) {
+                        Picked::Now(v) => v,
+                        Picked::Later | Picked::Unavailable => Vec::new(),
                     }
                 }
             };
-            match path {
-                Some(path) => crate::lightroom_destination::import(app, &path, &req),
+            match paths.split_first() {
+                Some((first, rest)) => crate::lightroom_import::import_batch(app, first, rest, &req),
                 None => Ok(Value::Null),
             }
         }

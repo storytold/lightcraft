@@ -21,6 +21,12 @@
   the search field's. A click anywhere in it puts the cursor in the field, and only the bar's empty space moves the
   window (#2807).
 
+### Import several Lightroom catalogs at once
+- File ▸ Import Lightroom Catalog… now takes several catalogs. The first asks where it goes, as before; the others are
+  imported after it, one by one, into the same library, so two catalogs end up in one library without starting each
+  import by hand. Each catalog's result is shown in turn. If an import is cancelled or fails, the rest of the batch is
+  not imported, and closing the destination window without importing drops it.
+
 ### Export subfolder variables
 - The Export dialog's Subfolder field now supports `{album}` (active album name sanitized for filesystem safety, empty outside an album view), `{date}` (batch export date in `YYYYMMDD`, local time), and `{hour}` (batch export time in `HHMM`, local time). An **Insert…** dropdown next to the field inserts tokens at the cursor. Tokens are stored in presets and expanded at export time, so the same preset produces dated subfolders on every use.
 ### Heal meets its surroundings (process 14)
