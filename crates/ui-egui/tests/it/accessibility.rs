@@ -159,6 +159,63 @@ fn every_interactive_node_has_a_name_in_every_view_and_tool() {
     assert!(problems.is_empty(), "{} accessibility problems:\n{}", problems.len(), problems.join("\n"));
 }
 
+/// Toggling a saved no-match album by keyboard keeps focus on the checkbox and updates one live result node.
+#[test]
+fn smart_rules_match_preview_is_live_after_keyboard_toggle() {
+    use egui::accesskit::Live;
+    use serde_json::json;
+
+    const TOGGLE: &str = "Allow saved rules to match photos";
+    const ZERO: &str = "Only 0 photos";
+    const ONE: &str = "1 photo match · updates automatically as photos change";
+
+    let mut h = harness(ViewMode::PhotoGrid, RightPanel::None);
+    let app = h.state_mut();
+    let ids: Vec<u64> = app.session.catalog.photos().map(|photo| photo.id.0).collect();
+    app.session.execute("photo.rate", &json!({"ids": ids, "rating": 0})).unwrap();
+    app.session.execute("photo.rate", &json!({"ids": [ids[0]], "rating": 1})).unwrap();
+    let album = app.session.execute("album.createSmart", &json!({"name": "Empty view", "rules": {"onlyNone": true, "rating": 1}})).unwrap();
+    app.run("dialog.smartAlbum", json!({"id": album["id"]})).unwrap();
+    h.run_steps(6);
+
+    let focused = |h: &Harness<'_, LightcraftApp>| {
+        h.root()
+            .children_recursive()
+            .map(|n| n.accesskit_node())
+            .any(|n| n.is_focused() && n.role() == Role::CheckBox && n.label().as_deref() == Some(TOGGLE))
+    };
+    let status_id = |h: &Harness<'_, LightcraftApp>, text: &str| {
+        let nodes: Vec<_> = h
+            .root()
+            .children_recursive()
+            .map(|n| n.accesskit_node())
+            .filter(|n| n.live() == Live::Polite && (n.label().as_deref() == Some(text) || n.value().as_deref() == Some(text)))
+            .map(|n| n.id())
+            .collect();
+        assert_eq!(nodes.len(), 1, "one live preview matching {text:?}");
+        nodes[0]
+    };
+    let zero = status_id(&h, ZERO);
+    for _ in 0..24 {
+        if focused(&h) {
+            break;
+        }
+        h.key_press(egui::Key::Tab);
+        h.run_steps(1);
+    }
+    assert!(focused(&h), "Tab reaches the edit-album checkbox");
+    h.key_press(egui::Key::Space);
+    h.run_steps(3);
+    assert!(focused(&h), "updating the count does not steal focus");
+    assert_eq!(status_id(&h, ONE), zero, "the live node's text changes without replacing the node");
+    h.run_steps(3);
+    assert_eq!(status_id(&h, ONE), zero, "idle redraws keep the same live node and text");
+    h.key_press(egui::Key::Space);
+    h.run_steps(3);
+    assert!(focused(&h));
+    assert_eq!(status_id(&h, ZERO), zero, "toggling off announces the zero result on the same node");
+}
+
 fn slider_value(h: &Harness<'_, LightcraftApp>, name: &str) -> Option<f64> {
     h.root()
         .children_recursive()

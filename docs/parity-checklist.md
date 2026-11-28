@@ -154,7 +154,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 |---|---|---|---|---|---|
 | LR-FILT-SEARCH-META | Text search | P0 | ✅ | `cmd:library.filter` (`text`), `crates/ui-egui/src/panels/topbar.rs`, `crates/catalog/src/query.rs` | fielded tokens (`rating:3`, `iso:>800`, `rating:>=3` / `iso:<=400`, `camera:…`); plain words also match the people named on faces; double quotes keep several words in one token (`person:"Jane Doe"`, `"jane doe"`, issue #1449); no suggestions dropdown |
 | LR-FILT-SEARCH-AI | Natural-language search | P2 | ⬜ | | |
-| LR-FILT-RATING | Rating filter | P0 | ✅ | `cmd:library.filter` (`rating`, `ratingOp`), `crates/ui-egui/src/panels/filterbar.rs` | ≥ / = / ≤ stars in the filter bar (`cmd:view.filterBar`) |
+| LR-FILT-RATING | Rating filter | P0 | ✅ | `cmd:library.filter` (`rating`, `ratingOp`), `crates/ui-egui/src/panels/filterbar.rs` | ≥ / = / ≤ stars in the filter bar (`cmd:view.filterBar`); = or ≤ no stars shows the unrated photos, as in Lightroom (issue #3417, `rating_exactly_or_at_most_zero_shows_the_unrated_photos`) |
 | LR-FILT-FLAG | Flag filter | P0 | ✅ | `cmd:library.filter` (`flag`, `flags`), `crates/ui-egui/src/panels/filterbar.rs` | picked / rejected / unflagged, toggled on and off like Classic's Attribute flag buttons: several at once show any of them (Picked + Unflagged hides only the rejects, issue #2588; `flags`, one chip); the single `flag` of saved filters, smart albums and agents still filters |
 | LR-FILT-LABEL | Colour-label filter | P1 | ✅ | `cmd:library.filter` (`label`), `crates/ui-egui/src/panels/filterbar.rs` | one label at a time; no “no label” choice |
 | LR-FILT-TYPE | Type / edited filter | P1 | ✅ | `cmd:library.filter` (`kind`, `merged`, `edited`), `crates/ui-egui/src/panels/filterbar.rs`, `crates/catalog/src/query.rs` (`merged_kind`) | photos / raw / videos / HDR / panoramas / HDR panoramas (merge results by name), edited / unedited; no depth kind |
@@ -809,6 +809,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-19 | minor | LR-EDIT-OPTICS-DEFRINGE: AI Defringe (beyond Lightroom), a user-installed defringe network with a cached per-photo correction; no model ships; status unchanged |
+| 2026-10-31 | patch | LR-FILT-RATING: = or ≤ no stars in the filter bar shows the unrated photos instead of every photo (#3417); status unchanged |
 | 2026-10-29 | minor | MENU-EDIT-SELECTBY: Edit → Select by lists each rating on its own (★ only … ★★★★★ only, `library.selectBy` with `ratingOp: eq`) after the "and higher" rows, beside Unrated (#3311); status unchanged (✅) |
 | 2026-11-15 | patch | LR-PRE-AMOUNT: Amount blends tone curves, fades in the strength of a profile/LUT or switched-on group a preset changes, and takes white balance on another scale whole (#2669); the step at half amount for switches and choices stays (#2207); status unchanged (✅) |
 | 2026-11-09 | minor | LR-PREF-LOCALSTORAGE: the low-disk notice warns under 20 GB free, no longer under 10 % of the drive (76 GB free of a 926 GB drive warned, #4013); status unchanged |

@@ -58,20 +58,35 @@ pub(super) fn view_rules(s: &Session) -> lightcraft_catalog::Filter {
     };
     match smart {
         Some(base) => {
+            // Exactly or at most zero selects only zero. Keep the album's saved rating
+            // and represent an impossible intersection explicitly instead of widening the view.
+            let no_match =
+                s.filter.rating == 0 && s.filter.rating_filters() && base.rating > 0 && base.rating_op != lightcraft_catalog::RatingOp::AtMost;
             // overlay the fields the filter bar changed
             let cur = serde_json::to_value(&s.filter).unwrap_or_default();
             let def = serde_json::to_value(Filter::default()).unwrap_or_default();
             let mut patch = serde_json::Map::new();
             if let (Some(c), Some(d)) = (cur.as_object(), def.as_object()) {
                 for (k, v) in c {
+                    if no_match && matches!(k.as_str(), "rating" | "ratingOp") {
+                        continue;
+                    }
                     if d.get(k) != Some(v) {
                         patch.insert(k.clone(), v.clone());
                     }
                 }
             }
+            // the rating rule is its stars and operator together: "= no stars" (the unrated
+            // photos) has the default stars, which alone would leave the album's own with "="
+            if !no_match && s.filter.rating_filters() {
+                patch.insert("rating".into(), cur["rating"].clone());
+                patch.insert("ratingOp".into(), cur["ratingOp"].clone());
+            }
             // the view as it is: a rule that no longer checks (its album was deleted) just matches
             // nothing there, and mustn't cost the filter bar's settings
-            merge_filter(&base, &Value::Object(patch), "").unwrap_or(base)
+            let mut saved = merge_filter(&base, &Value::Object(patch), "").unwrap_or(base);
+            saved.only_none |= no_match;
+            saved
         }
         None => {
             let mut f = s.source.to_filter(&s.filter, &s.catalog);

@@ -188,16 +188,35 @@ fn deleting_a_keyword_put_aside_keeps_the_rest_of_the_filter() {
 }
 
 #[test]
-fn a_rating_operator_without_stars_does_not_keep_an_emptied_filter_put_aside() {
+fn at_least_no_stars_does_not_keep_an_emptied_filter_put_aside() {
     let mut s = session_with_a_cat();
-    // the filter bar's operator picker can be set with no stars chosen; it filters nothing
-    s.execute("library.filter", &json!({"keyword": "cat", "ratingOp": "exactly"})).unwrap();
+    // "at least no stars" lets every photo through: it filters nothing
+    s.execute("library.filter", &json!({"keyword": "cat", "ratingOp": "atLeast"})).unwrap();
     s.execute("library.toggleFilters", &json!({})).unwrap();
     assert!(s.filters_off());
     s.execute("keyword.delete", &json!({"keyword": "cat"})).unwrap();
-    assert!(!s.filters_off(), "only an operator with no stars is left: nothing to bring back");
+    assert!(!s.filters_off(), "only an operator that filters nothing is left: nothing to bring back");
     let r = s.execute("library.toggleFilters", &json!({})).unwrap();
     assert_eq!(r["enabled"], json!(true));
+}
+
+#[test]
+fn exactly_or_at_most_no_stars_put_aside_comes_back_when_the_keyword_goes() {
+    for op in ["exactly", "atMost"] {
+        let mut s = session_with_a_cat();
+        // "= no stars" and "≤ no stars" show the unrated photos (#3417), so the rule is worth bringing back
+        s.execute("library.filter", &json!({"keyword": "cat", "ratingOp": op})).unwrap();
+        s.execute("library.toggleFilters", &json!({})).unwrap();
+        assert!(s.filters_off());
+        s.execute("keyword.delete", &json!({"keyword": "cat"})).unwrap();
+        assert!(s.filters_off(), "{op} no stars is still put aside");
+        let r = s.execute("library.toggleFilters", &json!({})).unwrap();
+        assert_eq!(r["enabled"], json!(true), "{op}");
+        assert_eq!(s.filter.keyword, None, "{op}");
+        assert_eq!(s.filter.rating, 0, "{op}");
+        assert_ne!(s.filter.rating_op, lightcraft_catalog::RatingOp::AtLeast, "{op}");
+        assert_eq!(s.visible().len(), 1, "{op}: only the unrated photo shows");
+    }
 }
 
 #[test]

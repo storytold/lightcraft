@@ -107,6 +107,57 @@ fn release(h: &mut Headless, at: Pos2) {
     h.settle(SETTLE);
 }
 
+#[test]
+fn a_saved_no_match_smart_album_keeps_its_filters_until_explicitly_enabled() {
+    use lightcraft_catalog::AlbumId;
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1200.0, 1000.0], 1.0);
+    let ids: Vec<u64> = h.app.session.catalog.photos().map(|photo| photo.id.0).collect();
+    h.app.session.execute("photo.rate", &json!({"rating": 0, "ids": ids})).unwrap();
+    h.app.session.execute("photo.rate", &json!({"rating": 1, "ids": [ids[0]]})).unwrap();
+    let group_at_limit = group(vec![group(vec![group(vec![rule(1), rule(2)])])]);
+    let id = h
+        .app
+        .session
+        .execute(
+            "album.createSmart",
+            &json!({"name": "Empty view", "rules": {
+                "rating": 1, "onlyNone": true, "ruleSet": {"match": "any", "rules": [group_at_limit]}
+            }}),
+        )
+        .unwrap()["id"]
+        .as_u64()
+        .unwrap();
+    let source = |h: &Headless| h.app.session.catalog.album(AlbumId(id)).unwrap().smart.as_deref().unwrap().clone();
+    let original = source(&h);
+    let open = |h: &mut Headless| {
+        let r = h.request("engine.execute", json!({"command": "dialog.smartAlbum", "params": {"id": id}}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+    };
+    open(&mut h);
+    assert!(has(&h, "field:smartAllowMatching"));
+    assert!(!has(&h, "ruleGrip:rules-0"), "do not edit the stored criteria while deciding whether to allow matches");
+    let dlg = h.app.ui.dialog.take().unwrap();
+    assert_eq!(crate::dialogs::confirm_dialog(&mut h.app, &dlg).unwrap()["count"], 0);
+    assert_eq!(source(&h), original, "unchanged save");
+    open(&mut h);
+    let mut dlg = h.app.ui.dialog.take().unwrap();
+    let crate::state::Dialog::SmartRules { name, .. } = &mut dlg else { panic!("no smart album editor") };
+    *name = "Renamed empty view".into();
+    assert_eq!(crate::dialogs::confirm_dialog(&mut h.app, &dlg).unwrap()["count"], 0);
+    assert_eq!(source(&h), original, "rename must not replace any criteria");
+    assert_eq!(h.app.session.catalog.album(AlbumId(id)).unwrap().name, "Renamed empty view");
+    open(&mut h);
+    let toggle = widget(&h, "field:smartAllowMatching").center();
+    pointer(&mut h, toggle, Some(true));
+    h.step();
+    release(&mut h, toggle);
+    let dlg = h.app.ui.dialog.take().unwrap();
+    assert_eq!(crate::dialogs::confirm_dialog(&mut h.app, &dlg).unwrap()["count"], 1);
+    assert_eq!(source(&h), lightcraft_catalog::Filter { only_none: false, ..original });
+}
+
 /// A whole drag: press the grip of `from`, move to the lower (`after`) or upper half of the row
 /// of `to`, release.
 fn drag(h: &mut Headless, from: &str, to: &str, after: bool) {

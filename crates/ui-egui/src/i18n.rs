@@ -474,6 +474,9 @@ pub fn color_label(catalog: &lightcraft_catalog::Catalog, label: lightcraft_cata
 
 /// A legacy smart-album filter summary, using the same display labels as filter chips.
 pub fn filter_label(filter: &lightcraft_catalog::Filter, catalog: &lightcraft_catalog::Catalog) -> String {
+    if filter.only_none {
+        return tr("Only 0 photos").to_string();
+    }
     if language() == Locale::En {
         filter.describe_with(catalog)
     } else {
