@@ -122,6 +122,7 @@ fn expand_report_noting(paths: &[String], skip: Option<&Path>, limits: crate::wa
 /// disk (a review hands over thousands of them, and telling a file from a folder is a round trip
 /// each on a network share). With `timed`, each folder's modification time goes to `note` too
 /// ([`crate::walk::files_in_noting_timed`]).
+#[cfg(test)]
 pub(super) fn expand_knowing(
     paths: &[String],
     skip: Option<&Path>,
@@ -666,6 +667,7 @@ mod prepared_tests {
         let mut prepared = Prepared {
             scanned: 2,
             items: vec![PreparedItem::Ready(Box::new(ready(&existing_path))), PreparedItem::Ready(Box::new(ready(&other_path)))],
+            ..Default::default()
         };
         prepared.revalidate_add(&s);
         assert!(matches!(prepared.items.first(), Some(PreparedItem::Duplicate { reason: "path", .. })));

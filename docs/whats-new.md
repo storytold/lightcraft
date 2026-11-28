@@ -9,6 +9,10 @@
 
 ## Unreleased
 
+### Scripted imports say what they skipped
+- `library.import` now reports what its folder walk left out, `skipped: {unreadable, unsupported}`, as
+  `library.importPreview` already did, so a script or MCP client can tell a skipped file from a missing one (#4319).
+
 ### The crop shows its size in pixels
 - The Crop panel shows the size the crop leaves, in pixels (as a full-size export makes it, such as 2160 × 2700 px),
   and dragging a crop handle shows it beside the pointer as it changes, so you can keep a minimum resolution while
