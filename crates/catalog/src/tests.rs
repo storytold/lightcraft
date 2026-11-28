@@ -661,7 +661,7 @@ fn set_embedded_lens_is_undoable_and_journaled() {
     let op = Op::SetEmbeddedLens { id: a, lens: Some(Box::new(lens)) };
     let op: Op = serde_json::from_str(&serde_json::to_string(&op).unwrap()).unwrap();
     let inv = c.apply(op).unwrap();
-    assert_eq!(c.photo(a).unwrap().embedded_lens, Some(lens));
+    assert_eq!(c.photo(a).unwrap().embedded_lens, Some(Box::new(lens)));
     let inv: Op = serde_json::from_str(&serde_json::to_string(&inv).unwrap()).unwrap();
     c.apply(inv).unwrap();
     assert_eq!(c.photo(a).unwrap().embedded_lens, None);
@@ -994,6 +994,52 @@ fn search_text_finds_people_and_quoted_values() {
     assert_eq!(q("   \t jane \u{3000} "), vec![jane, both], "any whitespace separates tokens");
 }
 
+/// The photos a tally that reads only some things of a photo has to look at again: those whose file, presence or flag
+/// changed, not those that were only rated, and not what an album, a stack or a folder label changed (no photo's own).
+#[test]
+fn photos_changed_since_names_the_photos_whose_read_aspects_changed() {
+    let mut c = Catalog::default();
+    let add = |c: &mut Catalog, name: &str| {
+        let id = c.alloc_photo_id();
+        c.apply(Op::AddPhoto {
+            photo: Box::new(Photo::new(id, Source::File { path: format!("/p/{name}") }, name, "JPEG", 60, 40, "2026-01-01T10:00:00")),
+        })
+        .unwrap();
+        id
+    };
+    let (a, b) = (add(&mut c, "a.jpg"), add(&mut c, "b.jpg"));
+    let files = Aspects::PRESENCE.with(Aspects::FILE);
+    let start = c.revision;
+    assert_eq!(c.photos_changed_since(start, files), Some(vec![]));
+    // a rating changes neither; a flag is read by the flag reader only
+    c.apply(Op::SetRating { id: a, rating: 3 }).unwrap();
+    c.apply(Op::SetFlag { id: b, flag: Flag::Pick }).unwrap();
+    assert_eq!(c.photos_changed_since(start, files), Some(vec![]));
+    assert_eq!(c.photos_changed_since(start, Aspects::FLAG), Some(vec![b]));
+    assert_eq!(c.touched_since(start), Some(vec![a, b]), "touched_since says every photo that was touched");
+    // a photo that comes in, moves or goes
+    let new = add(&mut c, "c.jpg");
+    c.apply(Op::Relink { id: a, file_name: "m.jpg".into(), source: Source::File { path: "/p/m.jpg".into() }, format: None }).unwrap();
+    c.apply(Op::RemovePhoto { id: b }).unwrap();
+    assert_eq!(c.photos_changed_since(start, files), Some(vec![a, b, new]), "each once, in id order");
+    // an op that changes no photo of its own is remembered, and is not in the answer (touched_since gives up on it)
+    let before = c.revision;
+    let album = c.alloc_album_id();
+    c.apply(Op::AddAlbum { album: Album { photos: vec![a], ..Album::new(album, "Trip") } }).unwrap();
+    assert_eq!(c.photos_changed_since(before, files), Some(vec![]));
+    assert_eq!(c.touched_since(before), None);
+    assert_eq!(c.photos_changed_since(start, files), Some(vec![a, b, new]), "what came before it is still known");
+    // not known: a revision that is not this catalog's past, and one set from outside (a library just loaded)
+    assert_eq!(c.photos_changed_since(c.revision + 5, files), None);
+    let old = c.revision;
+    c.revision = 7 << 32;
+    assert_eq!(c.photos_changed_since(old, files), None);
+    let loaded = c.revision;
+    c.apply(Op::SetRating { id: a, rating: 1 }).unwrap();
+    assert_eq!(c.photos_changed_since(loaded, files), Some(vec![]));
+    assert_eq!(c.photos_changed_since(old, files), None);
+}
+
 /// What the catalog remembers of its latest ops: which photos each changed and what of them, as long as that can be
 /// said photo by photo.
 #[test]
@@ -1140,4 +1186,122 @@ fn a_batch_that_cannot_be_rolled_back_whole_makes_earlier_changes_unknown() {
     assert!(c.photo(ids[0]).is_some() && c.stack(stack).is_none(), "the rollback went only part of the way");
     assert_eq!(c.touched_since(start), None, "so nothing is said of what changed");
     assert_eq!(c.touched_since(c.revision), Some(vec![]), "from after it, it is known again");
+}
+
+/// A batch that fails, and whose rollback fails halfway, says so and hands out what is left of the rollback.
+#[test]
+fn a_batch_that_cannot_be_rolled_back_whole_hands_out_what_is_left_of_the_rollback() {
+    let mut c = Catalog::default();
+    let mut ids = Vec::new();
+    for name in ["a.jpg", "b.jpg"] {
+        let id = c.alloc_photo_id();
+        let photo = Photo::new(id, Source::File { path: format!("/p/{name}") }, name, "JPEG", 60, 40, "2026-01-01T10:00:00");
+        c.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        ids.push(id);
+    }
+    let stack = c.alloc_stack_id();
+    c.apply(Op::AddStack { stack: Stack { id: stack, photos: ids.clone(), collapsed: false } }).unwrap();
+    let before = c.to_snapshot();
+    let missing = PhotoId(9_999);
+    // the photo goes, then its stack, then an op fails: putting the stack back needs the photo, which comes later
+    let torn = |ops: Vec<Op>| Op::Batch { ops: vec![Op::RemovePhoto { id: ids[0] }, Op::RemoveStack { id: stack }].into_iter().chain(ops).collect() };
+    let fail = Op::SetRating { id: missing, rating: 1 };
+
+    let revision = c.revision;
+    let e = c.apply(torn(vec![fail.clone()])).unwrap_err();
+    assert_eq!(c.revision, revision + 1, "the catalog changed, so what is derived from its revision is out of date");
+    assert_eq!(c.touched_since(revision), None, "and nothing is said of what changed");
+    let CatalogError::PartlyApplied { cause, remaining } = e else { panic!("expected a partly applied batch, got {e:?}") };
+    assert_eq!(*cause, CatalogError::NoPhoto(missing));
+    assert_ne!(c.to_snapshot(), before, "the rollback went only part of the way");
+    // what is left finishes the rollback
+    c.apply(*remaining).unwrap();
+    assert_eq!(c.to_snapshot(), before);
+
+    // a batch in a batch: what the inner one could not take back is taken back by the outer one's rollback, when it can
+    let nested = Op::Batch { ops: vec![Op::SetRating { id: ids[1], rating: 5 }, torn(vec![fail.clone()])] };
+    assert_eq!(c.apply(nested), Err(CatalogError::NoPhoto(missing)));
+    assert_eq!(c.to_snapshot(), before);
+
+    // an op that fails plainly is not partly applied, and leaves nothing for the next op to hand out
+    assert_eq!(c.apply(fail), Err(CatalogError::NoPhoto(missing)));
+    assert_eq!(c.to_snapshot(), before);
+}
+
+/// A batch that succeeded inside a batch that fails is taken back by its inverse, which is a batch too. When that inverse
+/// cannot go through as a whole (the stack is put back before the photo it holds), its ops are taken back one by one,
+/// so that what is handed out for a retry is only what still has to be done and the retry can finish.
+#[test]
+fn the_inverse_of_a_nested_batch_is_taken_back_op_by_op() {
+    let mut c = Catalog::default();
+    let mut ids = Vec::new();
+    for name in ["a.jpg", "b.jpg"] {
+        let id = c.alloc_photo_id();
+        let photo = Photo::new(id, Source::File { path: format!("/p/{name}") }, name, "JPEG", 60, 40, "2026-01-01T10:00:00");
+        c.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        ids.push(id);
+    }
+    let stack = c.alloc_stack_id();
+    c.apply(Op::AddStack { stack: Stack { id: stack, photos: ids.clone(), collapsed: false } }).unwrap();
+    let before = c.to_snapshot();
+    let missing = PhotoId(9_999);
+    // the inner batch goes through (the photo goes, then its stack); the outer one fails after it
+    let inner = Op::Batch { ops: vec![Op::RemovePhoto { id: ids[0] }, Op::RemoveStack { id: stack }] };
+    let outer = Op::Batch { ops: vec![inner, Op::SetRating { id: missing, rating: 1 }] };
+    let e = c.apply(outer).unwrap_err();
+    let CatalogError::PartlyApplied { cause, remaining } = e else { panic!("expected a partly applied batch, got {e:?}") };
+    assert_eq!(*cause, CatalogError::NoPhoto(missing));
+    assert!(c.photo(ids[0]).is_some(), "the photo came back: only what could not yet be done is left");
+    let Op::Batch { ops: left } = remaining.as_ref() else { panic!("a batch of what is left") };
+    assert!(matches!(left.as_slice(), [Op::AddStack { .. }]), "just the stack, on its own: {left:?}");
+    // what is left finishes the rollback
+    c.apply(*remaining).unwrap();
+    assert_eq!(c.to_snapshot(), before);
+}
+
+/// A batch that was only partly taken back is logged as it was and leaves the same changes when the log is replayed: the
+/// replay counts it and goes on with the records after it (the journal's open does the same).
+#[test]
+fn replaying_a_log_goes_on_after_a_partly_applied_batch() {
+    let mut c = Catalog::default();
+    let mut ids = Vec::new();
+    for name in ["a.jpg", "b.jpg"] {
+        let id = c.alloc_photo_id();
+        let photo = Photo::new(id, Source::File { path: format!("/p/{name}") }, name, "JPEG", 60, 40, "2026-01-01T10:00:00");
+        c.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        ids.push(id);
+    }
+    let stack = c.alloc_stack_id();
+    c.apply(Op::AddStack { stack: Stack { id: stack, photos: ids.clone(), collapsed: false } }).unwrap();
+    let start = c.clone();
+    // the photo goes, then its stack, then an op fails: putting the stack back needs the photo, which comes later
+    let torn =
+        Op::Batch { ops: vec![Op::RemovePhoto { id: ids[0] }, Op::RemoveStack { id: stack }, Op::SetRating { id: PhotoId(9_999), rating: 1 }] };
+    let rate = Op::SetRating { id: ids[1], rating: 4 };
+    assert!(matches!(c.apply(torn.clone()), Err(CatalogError::PartlyApplied { .. })));
+    c.apply(rate.clone()).unwrap();
+
+    let log = format!("{}{}", Catalog::op_to_log_line(&torn), Catalog::op_to_log_line(&rate));
+    let mut replayed = start;
+    assert_eq!(replayed.replay(&log).unwrap(), 2, "both records were replayed");
+    assert_eq!(replayed.to_snapshot(), c.to_snapshot(), "the log gives what the session had");
+
+    // an op that fails plainly still stops the replay
+    let bad = Op::SetRating { id: PhotoId(9_999), rating: 1 };
+    assert_eq!(replayed.replay(&Catalog::op_to_log_line(&bad)), Err(CatalogError::NoPhoto(PhotoId(9_999))));
+}
+
+/// `Photo::embedded_lens` is boxed to keep photo records small; the box doesn't change the serialized form:
+/// a photo written with the lens reads back with it, and its JSON is the bare lens, as before the box.
+#[test]
+fn boxed_embedded_lens_serializes_like_the_bare_lens() {
+    let lens = lightcraft_develop::EmbeddedLens { warp: Some(Default::default()), vignette: None, stages: Default::default(), ..Default::default() };
+    let mut p = Photo::new(PhotoId(1), Source::File { path: "/x.dng".into() }, "x.dng", "DNG", 4000, 3000, "2026-10-06T00:00:00");
+    p.embedded_lens = Some(Box::new(lens));
+    let json = serde_json::to_value(&p).unwrap();
+    assert_eq!(json["embedded_lens"], serde_json::to_value(lens).unwrap());
+    let back: Photo = serde_json::from_value(json).unwrap();
+    assert_eq!(back.embedded_lens.as_deref(), Some(&lens));
+    p.embedded_lens = None;
+    assert!(serde_json::to_value(&p).unwrap().get("embedded_lens").is_none(), "no lens, no field");
 }

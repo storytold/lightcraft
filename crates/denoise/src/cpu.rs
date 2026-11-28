@@ -35,6 +35,7 @@ fn sources(op: &Op) -> (usize, Option<usize>) {
     match op {
         Op::Conv(c) => (c.src, c.src2),
         Op::ConvT2(c) => (c.src, None),
+        Op::Add { src, src2 } => (*src, Some(*src2)),
         Op::MaxPool2 { src } | Op::DepthToSpace2 { src } => (*src, None),
     }
 }
@@ -67,14 +68,16 @@ pub struct NetRunner {
 
 impl NetRunner {
     pub fn new(net: &Net, tile: usize) -> Result<Self> {
-        if tile == 0
-            || tile > MAX_TILE
-            || !net.fits_tile(tile)
-            || net.in_channels != 4
-            || net.out_channels() != 3
-            || net.shape(0).is_none_or(|s| s.channels != net.in_channels)
-        {
+        if net.in_channels != 4 || net.out_channels() != 3 {
             return Err(bad("the tile or Bayer-to-RGB contract does not fit the network"));
+        }
+        Self::for_tiles(net, tile)
+    }
+
+    /// A runner for any channel counts (the caller checks the network's contract), on `tile × tile` inputs.
+    pub fn for_tiles(net: &Net, tile: usize) -> Result<Self> {
+        if tile == 0 || tile > MAX_TILE || !net.fits_tile(tile) || net.shape(0).is_none_or(|s| s.channels != net.in_channels) {
+            return Err(bad("the tile does not fit the network"));
         }
         let mut last = vec![0; net.ops().len() + 1];
         for (i, op) in net.ops().iter().enumerate() {
@@ -108,6 +111,7 @@ impl NetRunner {
                     (a.channels, a.side / 2)
                 }
                 Op::DepthToSpace2 { .. } => (a.channels / 4, a.side.checked_mul(2).ok_or_else(|| bad("size overflow"))?),
+                Op::Add { .. } => (a.channels, a.side),
             };
             let n = count(channels, side)?;
             let slot = busy
@@ -215,6 +219,7 @@ impl NetRunner {
                     &mut w.lower,
                     &mut w.product,
                 )?,
+                Op::Add { .. } => add(a, b.ok_or_else(|| bad("Add needs two inputs"))?, shape.side, dest)?,
                 Op::MaxPool2 { .. } => pool(a, shape.side, dest)?,
                 Op::DepthToSpace2 { .. } => shuffle(a, shape.side, dest)?,
             }
@@ -380,6 +385,46 @@ fn shuffle(a: &[f32], side: usize, dest: &mut [f32]) -> Result<()> {
         }
     }
     Ok(())
+}
+fn add(a: &[f32], b: &[f32], side: usize, dest: &mut [f32]) -> Result<()> {
+    let pixels = side * side;
+    let channels = a.len() / pixels;
+    let need = channels.checked_mul(pixels).ok_or_else(|| bad("Add size overflows"))?;
+    if a.len() < need || b.len() < need || dest.len() < need {
+        return Err(bad("Add inputs and output are not the same size"));
+    }
+    for c in 0..channels {
+        let a_plane = &a[c * pixels..(c + 1) * pixels];
+        let b_plane = &b[c * pixels..(c + 1) * pixels];
+        let d_plane = &mut dest[c * pixels..(c + 1) * pixels];
+        for (d, (&av, &bv)) in d_plane.iter_mut().zip(a_plane.iter().zip(b_plane)) {
+            *d = av + bv;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[test]
+fn add_op_produces_elementwise_sum() {
+    use crate::net::{Conv, Net, Op, TensorId};
+
+    fn conv(src: TensorId, cin: usize, cout: usize) -> Op {
+        Op::Conv(Conv { src, src2: None, cin, cout, k: 1, weight: vec![0.1; cout * cin], bias: vec![0.0; cout], leaky: None })
+    }
+
+    let tile = 8usize;
+    let ops = vec![conv(0, 4, 12), Op::Add { src: 1, src2: 1 }, Op::DepthToSpace2 { src: 2 }];
+    let net = Net::new(4, ops).unwrap();
+    let runner = NetRunner::new(&net, tile).unwrap();
+
+    let pixels = tile * tile;
+    let input: Vec<f32> = vec![1.0; 4 * pixels];
+    let output = runner.run(&input).unwrap();
+    assert_eq!(output.len(), 3 * (2 * tile) * (2 * tile));
+    for &v in &output {
+        assert!((v - 0.8).abs() < 1e-4, "expected 0.8, got {v}");
+    }
 }
 
 #[cfg(test)]

@@ -95,3 +95,37 @@ fn x_in_the_crop_tool_swaps_the_aspect_once() {
     h.settle(SETTLE);
     assert_eq!(crop(&h), (true, Some((400, 300))), "X again turns it back");
 }
+
+/// Zoomed in, the crop box reaches past the bottom of the loupe: its frame, guides and handles
+/// stop at the loupe and are not painted over the filmstrip below it (#3966).
+#[test]
+fn the_crop_box_is_not_painted_over_the_filmstrip() {
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
+    let id = h.app.session.visible_cloned()[1];
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [id.0], "active": id.0}}), T);
+    h.app.ui.view = ViewMode::Detail;
+    h.app.ui.filmstrip = true;
+    let r = h.request("engine.execute", json!({"command": "panel.crop"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.app.ui.zoom = crate::state::Zoom::Percent(400.0);
+    h.app.ui.pan = (0.5, 0.5);
+    h.settle(SETTLE);
+    let canvas = h.app.canvas_rect.expect("the loupe is drawn");
+    assert!(canvas.bottom() < 900.0 - 20.0, "the filmstrip shows below the loupe ({canvas:?})");
+    // the crop box's frame: a closed white line through its four corners
+    let white = egui::epaint::ColorMode::Solid(egui::Color32::WHITE);
+    let frames: Vec<_> = h
+        .view
+        .shapes
+        .iter()
+        .filter_map(|c| match &c.shape {
+            egui::epaint::Shape::Path(p) if p.closed && p.points.len() == 4 && p.stroke.width == 1.0 && p.stroke.color == white => Some((c, p)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(frames.len(), 1, "the crop box is drawn once");
+    let (c, p) = frames[0];
+    assert!(p.points.iter().any(|q| q.y > canvas.bottom() + 50.0), "zoomed in, the box reaches past the loupe ({:?}, loupe {canvas:?})", p.points);
+    assert!(c.clip_rect.bottom() <= canvas.bottom() + 0.5, "the box is clipped to the loupe, not {:?} (loupe {canvas:?})", c.clip_rect);
+}

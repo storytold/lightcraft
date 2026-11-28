@@ -86,6 +86,9 @@ fn model_files(dir: &Path, id: &str) -> PathBuf {
 fn model_installation_keeps_the_frame_pump_responsive_and_reuses_the_loaded_model() {
     use std::sync::{Mutex, mpsc};
     use std::time::Duration;
+    // How long either side waits for the other: an upper bound only (a passing run takes milliseconds), long
+    // enough for the install thread to be scheduled on a machine running every test binary at once (#4502)
+    const WAIT: Duration = Duration::from_secs(30);
     let mut x = setup("background-install", false);
     let path = model_files(&x.dir, "stand-in");
     let (entered_tx, entered_rx) = mpsc::channel();
@@ -97,7 +100,7 @@ fn model_installation_keeps_the_frame_pump_responsive_and_reuses_the_loaded_mode
     x.s.denoise.loader = Arc::new(move |_, _| {
         worker_loads.fetch_add(1, Ordering::Relaxed);
         entered_tx.send(()).map_err(|e| e.to_string())?;
-        release_rx.lock().unwrap().recv_timeout(Duration::from_secs(3)).map_err(|e| e.to_string())?;
+        release_rx.lock().unwrap().recv_timeout(WAIT).map_err(|e| e.to_string())?;
         Ok(Arc::new(Dim { runs: runs.clone() }))
     });
     let info = x.s.execute("denoise.models.inspect", &json!({"path": path})).unwrap();
@@ -105,7 +108,7 @@ fn model_installation_keeps_the_frame_pump_responsive_and_reuses_the_loaded_mode
     assert_eq!(loads.load(Ordering::Relaxed), 0, "showing terms never executes the model");
     let r = x.s.execute("denoise.models.install", &json!({"path": path, "acknowledged": true, "background": true})).unwrap();
     assert_eq!(r["started"], "local-install");
-    entered_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    entered_rx.recv_timeout(WAIT).unwrap();
     // The loader is blocked: the frame pump must still return, reporting installation in progress.
     let state = x.s.execute("denoise.models.downloads", &json!({})).unwrap();
     assert_eq!(state["downloads"][0]["state"], "installing");
@@ -113,7 +116,8 @@ fn model_installation_keeps_the_frame_pump_responsive_and_reuses_the_loaded_mode
     assert_eq!(x.s.execute("denoise.status", &json!({})).unwrap()["model"]["id"], "builtin");
     assert!(x.s.execute("denoise.models.install", &json!({"path": path, "acknowledged": true, "background": true})).is_err());
     release_tx.send(()).unwrap();
-    for _ in 0..600 {
+    let deadline = std::time::Instant::now() + WAIT;
+    while std::time::Instant::now() < deadline {
         let v = x.s.execute("denoise.models.downloads", &json!({})).unwrap();
         if v["downloads"][0]["state"] == "installed" {
             break;
