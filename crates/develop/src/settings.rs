@@ -109,15 +109,16 @@ pub enum Process {
     /// V10, calibrated against Lightroom exports of real edits: global Shadows answers large amounts
     /// compressively (`lightcraft_pipeline::finish::tone_slider`), a negative Texture smooths less
     /// (`finish::texture_slider`) and the Global grading wheel tints less (`colorops::global_wheel`).
-    /// `ProcessVersion(11)` and `ProcessVersion(12)` name no process: a saved 11 or 12 renders as V10.
+    /// `ProcessVersion(11)`, `ProcessVersion(12)` and `ProcessVersion(15)` name no process: a saved
+    /// 11 or 12 renders as V10, a saved 15 as V14 (15 is claimed by open pull requests #4047 and #4698).
     V13,
     /// V13, with Heal and Remove spots pinned to the photo on the spot's edge: the correction is a
     /// membrane fill of the log ratio of photo to source, the source's fine detail is matched to its
     /// surroundings, and every spot reads its source at whole pixels
     /// (`lightcraft_pipeline::spots::HealMethod`).
     V14,
-    /// V14, with a lifted toe (`Blacks > 0` on the generic raw curve, no per-file camera look)
-    /// adding neutral light: the per-pixel stage fades deep shadows towards grey by the lifted
+    /// V14 plus: a lifted toe (`Blacks > 0` on the generic raw curve, no per-file camera look)
+    /// adds neutral light: the per-pixel stage fades deep shadows towards grey by the lifted
     /// amount instead of scaling their chromaticity up, so lifted blacks stay neutral rather than
     /// turning purple. V1 to V14 renders are unchanged.
     V16,
