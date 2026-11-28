@@ -796,7 +796,7 @@ mod tests {
             let win = PixelWindow { x: 1995, y: 1495, w: 10, h: 10 };
             let l = layout(&spot, &frame, fw, fh, ppl).expect("a spot inside the image");
             let (dx, dy) = l.offset.expect("an explicit source");
-            for process in [Process::V13, Process::V14] {
+            for process in [Process::V13, Process::V14, Process::V16] {
                 let s = DevelopSettings { process: process.version(), ..with_spots(vec![spot.clone()]) };
                 let method = HealMethod::of(&s);
                 let g = window_for_reads(&s, &frame, fw, fh, ppl, win);

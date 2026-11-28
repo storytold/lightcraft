@@ -872,6 +872,10 @@ fn highlights_shadows_base_matches_on_every_process() {
             check(&format!("{p:?} highlights/shadows {w}"), &src, &raw, &s, &req);
             typical(&mut s);
             check(&format!("{p:?} typical {w}"), &src, &raw, &s, &req);
+            // A lifted toe (`blacks > 0`) fades towards grey from V16 (V1 to V14 keep the old scaling):
+            // the new `TOE` finish parameter must match the CPU's.
+            s.light.blacks = 40.0;
+            check(&format!("{p:?} lifted toe {w}"), &src, &raw, &s, &req);
             s.masks = vec![Mask {
                 components: vec![MaskComponent {
                     name: None,
@@ -1531,7 +1535,7 @@ fn spots_match() {
             ],
         ),
     ];
-    for ((name, spots), process) in sets.into_iter().flat_map(|set| [Process::V13, Process::V14].map(|p| (set.clone(), p))) {
+    for ((name, spots), process) in sets.into_iter().flat_map(|set| [Process::V13, Process::V14, Process::V16].map(|p| (set.clone(), p))) {
         let mut s = DevelopSettings { process: process.version(), ..Default::default() };
         typical(&mut s);
         s.spots = spots;

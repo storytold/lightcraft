@@ -397,7 +397,7 @@ fn a_spot_reading_exactly_the_span_limit_matches_the_whole_render() {
         source_offset: Some(Point::new(0.8188, 0.0)),
     };
     let win = PixelWindow { x: 999, y: 7, w: 2, h: 2 };
-    for p in [Process::V1, Process::V8, Process::V13, Process::V14] {
+    for p in [Process::V1, Process::V8, Process::V13, Process::V14, Process::V16] {
         let s = DevelopSettings { process: p.version(), spots: vec![spot.clone()], ..Default::default() };
         let f = render(&src, &SourceInfo::default(), &s, &req).image;
         let part = render(&src, &SourceInfo::default(), &s, &RenderRequest { window: Some(win), ..req }).image;
@@ -447,6 +447,8 @@ fn saved_spots_before_v14_render_as_they_did() {
         assert_eq!(pixels(p), main, "saved {p:?}");
     }
     assert_ne!(pixels(Process::V14.version()), main, "V14's heal");
+    assert_ne!(pixels(Process::V16.version()), main, "V16's heal");
+    assert_eq!(pixels(Process::V16.version()), pixels(Process::V14.version()), "V16 keeps V14's heal (no Blacks lift here)");
 }
 
 // Given a spot with an automatic source, two windows over the same spot choose the same source

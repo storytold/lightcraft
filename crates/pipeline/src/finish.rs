@@ -25,6 +25,13 @@ fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// Fade a tone-mapped pixel towards neutral grey by the lifted-toe amount (process V16):
+/// deep shadows lifted by `Blacks > 0` stay neutral instead of amplifying their cast.
+fn fade_lifted_toe(display: [f32; 3], output_luma: f32, toe: f32) -> [f32; 3] {
+    let fade = ((output_luma - toe) / output_luma).clamp(0.0, 1.0);
+    if fade < 1.0 { display.map(|v| output_luma + (v - output_luma) * fade) } else { display }
+}
+
 /// Parametric region curve (encoded domain) composed with the master point curve.
 fn curve_luts(c: &ToneCurve) -> Option<[Lut1; 3]> {
     let parametric = c.highlights != 0.0 || c.lights != 0.0 || c.darks != 0.0 || c.shadows != 0.0;
@@ -103,10 +110,10 @@ impl GrainModel {
                     seed: g.seed,
                 })
             }),
-            Process::V7 | Process::V8 | Process::V10 | Process::V13 | Process::V14 if draft => {
+            Process::V7 | Process::V8 | Process::V10 | Process::V13 | Process::V14 | Process::V16 if draft => {
                 crate::crystal::CrystalGrain::draft(g, px_per_long).map(GrainModel::Crystal)
             }
-            Process::V7 | Process::V8 | Process::V10 | Process::V13 | Process::V14 => {
+            Process::V7 | Process::V8 | Process::V10 | Process::V13 | Process::V14 | Process::V16 => {
                 crate::crystal::CrystalGrain::new(g, px_per_long).map(GrainModel::Crystal)
             }
         }
@@ -227,6 +234,10 @@ pub struct FinishParams {
     /// Peak linear output relative to SDR white: 1 for SDR renders; `2^max_ev` for an HDR render
     /// ([`OutputDepth::F32Hdr`] with HDR on), which keeps values above 1 instead of clipping them.
     pub peak: f32,
+    /// Neutral lift of the toe from `Blacks > 0` on the generic raw curve (process V16): the
+    /// per-pixel stage fades deep shadows towards grey by this amount; 0 on older processes,
+    /// on raws with a per-file camera look, and on display-referred sources.
+    pub toe: f32,
 }
 
 pub struct FinishParamsInput<'a> {
@@ -269,6 +280,7 @@ impl FinishParams {
             calib: if calibration { crate::colorops::calibration_matrix(&s.calibration) } else { None },
             shadow_tint: if calibration { (s.calibration.shadows_tint / 100.0) as f32 } else { 0.0 },
             tone: base_tone(s, info, peak),
+            toe: toe_for(s, info),
             light: crate::light_v3::LightOps::new(s, info),
             lut: crate::lut::get(&s.profile.id).map(|l| (l, (s.profile.amount / 100.0).clamp(0.0, 2.0) as f32)),
             ops: ColorOps::new(s),
@@ -357,6 +369,22 @@ pub fn texture_slider(value: f64, process: lightcraft_develop::Process) -> f32 {
     if process >= lightcraft_develop::Process::V13 && t < 0.0 { (t * NEGATIVE_TEXTURE_V13) as f32 } else { t as f32 }
 }
 
+/// Additive toe lift per unit `blacks / 100` when `blacks > 0` (process V16).
+const TOE_LIFT_SCALE: f32 = 0.03;
+
+/// Neutral toe lift for `s` on `info`: `Blacks > 0` on the generic raw curve (a raw without a
+/// per-file camera look) from process V16; 0 everywhere else, so V1 to V14 render as before.
+pub fn toe_for(s: &DevelopSettings, info: &SourceInfo) -> f32 {
+    if s.process.process() < Process::V16 {
+        return 0.0;
+    }
+    if !info.raw || info.camera_tone.is_some() {
+        return 0.0;
+    }
+    let b = (s.light.blacks / 100.0) as f32;
+    if b > 0.0 { b * TOE_LIFT_SCALE } else { 0.0 }
+}
+
 /// The base tone map (scene → display luminance, with Contrast, Whites and Blacks) of `s`'s
 /// rendering process. This is where a new tone model branches: a retuned default tone curve (issue
 /// #146) is a new [`Process`] with its own arm here, and V1's arm stays as it is, so photos edited
@@ -382,8 +410,9 @@ pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
             None => ToneMap::display_hdr(l.contrast, l.whites, l.blacks, peak),
         },
         // V4, with a raw's tone curve rolling off into white in stops: a camera curve past its last
-        // knot, the generic curve from half a stop below its white point instead of clipping (issue #1632)
-        Process::V5 | Process::V6 | Process::V7 | Process::V8 | Process::V10 | Process::V13 | Process::V14 => {
+        // knot, the generic curve from half a stop below its white point instead of clipping (issue #1632).
+        // V16 uses the same tone map; its lifted toe is a per-pixel fade (`FinishParams::toe`).
+        Process::V5 | Process::V6 | Process::V7 | Process::V8 | Process::V10 | Process::V13 | Process::V14 | Process::V16 => {
             match info.camera_tone.as_ref().filter(|_| info.raw) {
                 Some(curve) => ToneMap::camera_rolloff_hdr(curve, 0.0, l.whites, 0.0, peak),
                 None if info.raw => ToneMap::rolloff_hdr(l.contrast, l.whites, l.blacks, peak),
@@ -523,6 +552,12 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             let yl = luminance_2020(c);
             let o = fp.tone.apply(yl);
             let mut d = if yl > 1e-9 { c.map(|v| v * o / yl) } else { [0.0; 3] };
+
+            // Process V16: a lifted toe adds neutral light, so fade towards grey.
+            if fp.toe > 0.0 && o > 0.0 {
+                d = fade_lifted_toe(d, o, fp.toe);
+            }
+
             let k = fp.tone.chroma_scale(o);
             if k != 1.0 {
                 d = d.map(|v| o + (v - o) * k);

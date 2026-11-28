@@ -293,8 +293,8 @@ mod tests {
         img
     }
 
-    /// V13 and older photos (and a saved 9, 11 or 12, which render as V8 or V10) keep the averaged heal; V14 and new
-    /// photos get the pinned one.
+    /// V13 and older photos (and a saved 9, 11, 12 or 15, which render as V8, V10 or V14) keep the
+    /// averaged heal; V14 and later photos get the pinned one.
     #[test]
     fn the_process_picks_the_heal() {
         let on = |p: Process| DevelopSettings { process: p.version(), ..Default::default() };
@@ -302,7 +302,8 @@ mod tests {
             assert_eq!(HealMethod::of(&on(p)), HealMethod::Averaged, "{p:?}");
         }
         assert_eq!(HealMethod::of(&on(Process::V14)), HealMethod::Pinned);
-        assert_eq!(Process::LATEST, Process::V14);
+        assert_eq!(HealMethod::of(&on(Process::V16)), HealMethod::Pinned);
+        assert_eq!(Process::LATEST, Process::V16);
         assert_eq!(HealMethod::of(&DevelopSettings::default()), HealMethod::Pinned, "new photos get the latest process");
     }
 

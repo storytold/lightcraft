@@ -29,6 +29,68 @@ fn grey_ramp_stays_neutral() {
     }
 }
 
+/// A lifted toe (`blacks > 0`) adds neutral light from V16: near-blacks render brighter but
+/// neutral instead of amplifying their cast.
+#[test]
+fn blacks_lift_fades_deep_shadows_to_neutral() {
+    let src = Rgb32f::from_fn(64, 64, |x, y| {
+        let n = (((x * 31 + y * 17) % 7) as f32 - 3.0) * 0.0002;
+        [0.005 + n, 0.0025, 0.006 - n]
+    });
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let mut s = DevelopSettings::default();
+    assert_eq!(s.process.process(), lightcraft_develop::Process::V16);
+    s.light.blacks = 40.0;
+    let r = render(&src, &info, &s, &RenderRequest::fit(64, 64)).image;
+    let p = r.get(32, 32);
+    let (rr, gg, bb) = (p[0] as f32, p[1] as f32, p[2] as f32);
+    assert!(rr > 10.0 && gg > 10.0 && bb > 10.0, "not lifted: {p:?}");
+    assert!((rr - bb).abs() < 8.0 && (rr - gg).abs() < 8.0 && (gg - bb).abs() < 8.0, "cast amplified: {p:?}");
+}
+
+/// V14 keeps the rendering it always had under a lifted toe: still amplifying the cast (no
+/// fade), unlike V16.
+#[test]
+fn v14_keeps_the_old_lifted_toe() {
+    use lightcraft_develop::{Process, ProcessVersion};
+    let src = Rgb32f::from_fn(64, 64, |x, y| {
+        let n = (((x * 31 + y * 17) % 7) as f32 - 3.0) * 0.0002;
+        [0.005 + n, 0.0025, 0.006 - n]
+    });
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let on = |p: ProcessVersion| {
+        let mut s = DevelopSettings { process: p, ..DevelopSettings::default() };
+        s.light.blacks = 40.0;
+        render(&src, &info, &s, &RenderRequest::fit(64, 64)).image
+    };
+    let (v14, v16) = (on(Process::V14.version()), on(Process::V16.version()));
+    assert_ne!(v14.data, v16.data, "V16 fades the lifted toe");
+    let p = v14.get(32, 32);
+    assert!((p[1] as i32 - p[2] as i32).abs() >= 8, "V14 keeps the old cast: {p:?}");
+}
+
+/// The toe lift is zero unless `blacks > 0` on the generic raw curve from V16: zero on older
+/// processes, on raws with a camera look, on display-referred sources, and at neutral settings.
+#[test]
+fn toe_lift_is_zero_unless_blacks_are_positive_on_generic_raw_v16() {
+    use crate::finish::toe_for;
+    use lightcraft_develop::{Process, ProcessVersion};
+    let generic = SourceInfo { raw: true, ..Default::default() };
+    let with_look = SourceInfo { raw: true, camera_tone: crate::tone::default_raw_camera_tone(), ..Default::default() };
+    let rendered = SourceInfo { raw: false, ..Default::default() };
+    let blacks = |process: ProcessVersion, info: &SourceInfo, blacks: f64| {
+        let mut s = DevelopSettings { process, ..DevelopSettings::default() };
+        s.light.blacks = blacks;
+        toe_for(&s, info)
+    };
+    assert_eq!(blacks(Process::V16.version(), &generic, 0.0), 0.0);
+    assert_eq!(blacks(Process::V16.version(), &generic, -40.0), 0.0);
+    assert_eq!(blacks(Process::V14.version(), &generic, 40.0), 0.0);
+    assert_eq!(blacks(Process::V16.version(), &with_look, 40.0), 0.0);
+    assert_eq!(blacks(Process::V16.version(), &rendered, 40.0), 0.0);
+    assert!((blacks(Process::V16.version(), &generic, 40.0) - 0.012).abs() < 1e-6);
+}
+
 #[test]
 fn every_slider_changes_or_keeps_output_without_panicking() {
     let src = scene();
