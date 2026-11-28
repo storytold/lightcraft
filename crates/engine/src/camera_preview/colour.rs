@@ -126,11 +126,8 @@ pub(super) fn starting_colour_with(
     (xy, t, look.or_else(|| dark(raw, &t)))
 }
 
-/// Additional profile resolution for this proposal's pooled/DNG routes; CR3 keeps Main's route.
+/// Resolve the file or database correction before the pooled and DNG colour fits remove lens opcodes.
 pub(crate) fn correspondence_correction(raw: &RawImage, bytes: &[u8]) -> Option<lightcraft_develop::EmbeddedLens> {
-    if raw.format == RawFormat::Cr3 {
-        return None;
-    }
     crate::lens_profiles::for_raw(&raw.info(), || lightcraft_meta::extract(bytes))
 }
 
@@ -152,7 +149,7 @@ pub(super) fn starting_colour_tags_with_correction(
     bytes: &[u8],
     correction: Option<&lightcraft_develop::EmbeddedLens>,
 ) -> Option<ColorData> {
-    let correction = correction.filter(|_| raw.format != RawFormat::Cr3).map(|correction| lightcraft_develop::EmbeddedLens {
+    let correction = correction.map(|correction| lightcraft_develop::EmbeddedLens {
         vignette: crate::files::embedded_lens(&raw.info()).and_then(|lens| lens.vignette),
         ..*correction
     });

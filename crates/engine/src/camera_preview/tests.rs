@@ -1,4 +1,4 @@
-use super::proxy::{align_profile_geometry, resample_correspondence};
+use super::proxy::{align_profile_geometry, resample_correspondence, sample_correspondence, sample_cr3_correspondence};
 use super::tone::{ELASTICITY_BLACK, MAX_TONE_ELASTICITY, TONE_REPAIR_ELASTICITY, limit_elasticity};
 use super::*;
 use lightcraft_raw::profile::{HsvTableApply, ProfileLookHueSat};
@@ -1016,13 +1016,27 @@ fn correspondence_samples_use_only_neighbours_with_nonzero_weight() {
     let mut image = Rgb32f::new(2, 2);
     image.data.fill([f32::NAN; 3]);
     image.set(0, 0, valid);
-    let sample = |image: &Rgb32f, x, y| resample_correspondence(image, |_, _| lightcraft_geom::Point::new(x, y)).get(0, 0);
-    assert_eq!(sample(&image, 0.5, 0.5), valid);
-    assert!(sample(&image, 1.0, 1.0).iter().all(|v| v.is_nan()));
-    for (x, y) in [(1, 0), (0, 1)] {
-        let mut axis = image.clone();
-        axis.set(x, y, valid.map(|v| 3.0 * v));
-        assert_eq!(sample(&axis, 0.5 + x as f64 * 0.5, 0.5 + y as f64 * 0.5), valid.map(|v| 2.0 * v));
+    for interpolation in [sample_correspondence, sample_cr3_correspondence] {
+        let sample = |image: &Rgb32f, x, y| resample_correspondence(image, |_, _| lightcraft_geom::Point::new(x, y), interpolation).get(0, 0);
+        assert_eq!(sample(&image, 0.5, 0.5), valid);
+        assert!(sample(&image, 1.0, 1.0).iter().all(|v| v.is_nan()));
+        for (x, y) in [(1, 0), (0, 1)] {
+            let mut axis = image.clone();
+            axis.set(x, y, valid.map(|v| 3.0 * v));
+            assert_eq!(sample(&axis, 0.5 + x as f64 * 0.5, 0.5 + y as f64 * 0.5), valid.map(|v| 2.0 * v));
+        }
+    }
+    let sample = |image: &Rgb32f, x, y| resample_correspondence(image, |_, _| lightcraft_geom::Point::new(x, y), sample_cr3_correspondence).get(0, 0);
+    // These coordinates still have a positive neighbour weight even though casting them to f32 rounds to the centre.
+    let next = 0.5f64.next_up();
+    for (x, y) in [(next, 0.5), (0.5, next)] {
+        assert!(sample(&image, x, y).iter().all(|v| v.is_nan()));
+    }
+    let mut mask = Rgb32f::new(2, 2);
+    mask.set(0, 0, [1.0; 3]);
+    let almost_next_centre = 1.5f64.next_down();
+    for (x, y) in [(almost_next_centre, 0.5), (0.5, almost_next_centre)] {
+        assert!(sample(&mask, x, y)[0] > 0.0, "a clipped neighbour with positive weight must count");
     }
 }
 
@@ -1042,11 +1056,15 @@ fn profile_geometry_target(sensor: &Rgb32f, lens: &lightcraft_develop::EmbeddedL
     let mut warp = lightcraft_pipeline::optics::Warp::identity(sensor.width as f64, sensor.height as f64);
     warp.lens = Some(*lens);
     warp.lens_dist = 1.0;
-    let warped = resample_correspondence(sensor, |x, y| warp.corrected_to_source(lightcraft_geom::Point::new(x, y), 1));
-    resample_correspondence(&warped, |x, y| {
-        let (x, y) = framing.source(x as f32, y as f32, sensor.width, sensor.height);
-        lightcraft_geom::Point::new(f64::from(x), f64::from(y))
-    })
+    let warped = resample_correspondence(sensor, |x, y| warp.corrected_to_source(lightcraft_geom::Point::new(x, y), 1), sample_correspondence);
+    resample_correspondence(
+        &warped,
+        |x, y| {
+            let (x, y) = framing.source(x as f32, y as f32, sensor.width, sensor.height);
+            lightcraft_geom::Point::new(f64::from(x), f64::from(y))
+        },
+        sample_correspondence,
+    )
 }
 
 fn geometry_rms(a: &Rgb32f, b: &Rgb32f) -> f64 {
@@ -1399,20 +1417,8 @@ fn external_profile_geometry_reaches_file_and_pooled_pairs_in_the_default_crop()
     exif.set(tags::LENS_MODEL, Value::Ascii("Synthetic 18mm".into()));
     ifd.set_child(tags::EXIF_IFD, exif);
     let file = profile_geometry_file(&target, ifd);
-    // Standalone non-CR3 scope: a coherent profile must not alter Main's CR3 framing route.
     let mut cr3 = raw.clone();
     cr3.format = RawFormat::Cr3;
-    let baseline = proxies(&cr3, &file, &transform, PROXY, 0.0, None, None).unwrap();
-    let proposed = proxies(&cr3, &file, &transform, PROXY, 0.0, None, Some(&lens)).unwrap();
-    let bits = |image: &Rgb32f| image.data.iter().flatten().map(|v| v.to_bits()).collect::<Vec<_>>();
-    assert_eq!(bits(&baseline.0), bits(&proposed.0), "CR3 sensor keeps Main framing");
-    assert_eq!(bits(&baseline.1), bits(&proposed.1), "CR3 reference is unchanged");
-    assert_eq!(baseline.2, proposed.2, "CR3 clipping is unchanged");
-    let cr3_samples = |correction: Option<&lightcraft_develop::EmbeddedLens>| {
-        let samples = profile_samples(&cr3, &file, None, correction).expect("CR3 colour and tone samples");
-        (samples.colour, samples.tone)
-    };
-    assert!(cr3_samples(None) == cr3_samples(Some(&lens)), "CR3 pooled samples preserve the original framing");
     let (plain, reference, _) = proxies(&raw, &file, &transform, PROXY, 0.0, None, None).unwrap();
     let (mut aligned, _, _) = proxies(&raw, &file, &transform, PROXY, 0.0, None, Some(&lens)).unwrap();
     let mut plain_render = plain;
@@ -1448,8 +1454,7 @@ fn external_profile_geometry_reaches_file_and_pooled_pairs_in_the_default_crop()
 
     assert_file_owned_dng_vignette_contract(&mut raw, &file, &lens, &white, &expected_tags);
 
-    // A real configured profile with nonzero vignetting must still be available to Main's
-    // per-file CR3 path, while this proposal's new Pool/DNG lookup stays excluded.
+    // Resolve a real configured CR3 profile through the shared Pool/DNG lookup.
     let vignetted_db =
         DB.replace("</calibration>", r#"<vignetting model="pa" focal="18" aperture="3.5" distance="1000" k1="-0.4" k2="0" k3="0" /></calibration>"#);
     let path = std::path::PathBuf::from(std::env::var_os(crate::lens_profiles::ENV).unwrap()).join("synthetic.xml");
@@ -1457,37 +1462,18 @@ fn external_profile_geometry_reaches_file_and_pooled_pairs_in_the_default_crop()
     crate::lens_profiles::reload();
     let resolved = crate::lens_profiles::for_raw(&cr3.info(), || lightcraft_meta::extract(&file)).unwrap();
     assert!(resolved.warp.is_some() && resolved.vignette.is_some(), "fixture resolves both corrections");
-    let mut main_lens = resolved;
-    main_lens.warp = None;
-    let main_proxy = proxies(&cr3, &file, &transform, PROXY, 0.0, None, Some(&main_lens)).unwrap();
-    let actual_proxy = proxies(&cr3, &file, &transform, PROXY, 0.0, None, Some(&resolved)).unwrap();
-    assert_eq!(bits(&main_proxy.0), bits(&actual_proxy.0), "CR3 keeps Main's vignetting and framing, ignoring the new radial proposal");
-    let (mut unshaded, reference, clipped, framing) = super::proxy::framed_proxies(&cr3, &file, &transform, PROXY, 0.0, None, None).unwrap();
-    let frame = ProxyFrame { orientation: lightcraft_geom::Orientation::Normal, framing };
-    let vignette = resolved.vignette.as_ref().unwrap();
-    let share = camera_vignetting_amount(&unshaded, &reference, &clipped, vignette, frame);
-    let gains = vignetting_gains(&unshaded, vignette, frame);
-    for (p, gain) in unshaded.data.iter_mut().zip(gains) {
-        *p = p.map(|v| v * (1.0 + (gain - 1.0) * share) as f32);
-    }
-    assert_eq!(bits(&unshaded), bits(&actual_proxy.0), "CR3 uses the share measured at the framed sensor positions");
-    assert_eq!(main_proxy.2, actual_proxy.2, "CR3 masks keep Main semantics");
-    assert!(cr3_samples(Some(&main_lens)) == cr3_samples(Some(&resolved)), "the database warp must not change pooled CR3 samples");
-    assert!(correspondence_correction(&cr3, &file).is_none(), "the actual shared Pool/DNG lookup excludes CR3");
-    let expected = super::colour::starting_colour_tags_with_correction(&mut cr3.clone(), &file, None);
-    assert_eq!(starting_colour_tags(&mut cr3.clone(), &file), expected, "public DNG lookup keeps Main's CR3 route");
-    assert_eq!(
-        super::colour::starting_colour_tags_with_correction(&mut cr3, &file, Some(&resolved)),
-        expected,
-        "injected CR3 correction cannot bypass DNG scope"
-    );
+    assert_eq!(correspondence_correction(&cr3, &file), Some(resolved));
+    let warp_only = lightcraft_develop::EmbeddedLens { vignette: None, ..resolved };
+    let expected = super::colour::starting_colour_tags_with_correction(&mut cr3.clone(), &file, Some(&warp_only));
+    assert_ne!(expected, super::colour::starting_colour_tags_with_correction(&mut cr3.clone(), &file, None));
+    assert_eq!(starting_colour_tags(&mut cr3, &file), expected, "public CR3 DNG lookup keeps the warp and excludes database shading");
 }
 
 #[test]
 fn correspondence_mask_keeps_every_contributing_clipped_sample_and_invalid_border() {
     let mut mask = Rgb32f::new(8, 6);
     mask.data[2 * 8 + 3] = [1.0; 3];
-    let result = resample_correspondence(&mask, |x, y| lightcraft_geom::Point::new(x + 0.75, y + 0.5));
+    let result = resample_correspondence(&mask, |x, y| lightcraft_geom::Point::new(x + 0.75, y + 0.5), sample_correspondence);
     assert!(result.data[8 + 2][0] > 0.0 && result.data[8 + 3][0] > 0.0);
     assert!(result.data[2 * 8 + 2][0] > 0.0 && result.data[2 * 8 + 3][0] > 0.0);
     assert_eq!(result.data[0][0], 0.0);
@@ -1495,6 +1481,570 @@ fn correspondence_mask_keeps_every_contributing_clipped_sample_and_invalid_borde
     // The final box reduction retains fractional positive masks as clipped too.
     let reduced = resize(&result, 4, 3, Filter::Box);
     assert!(reduced.data[1][0] > 0.0 && reduced.data[5][0] > 0.0);
+}
+
+#[test]
+fn cr3_framing_only_does_not_report_profile_gate_scores() {
+    let original = profile_geometry_scene(384, 256);
+    let candidate = profile_geometry_target(&original, &synthetic_profile_lens(), Cr3Framing::IDENTITY);
+    // Seed real proposal diagnostics, then ensure the framing-only call clears them.
+    assert!(super::proxy::estimate_profile_framing(&candidate, &candidate, &original).is_some());
+    assert!(super::proxy::geometry_gate_scores().is_some());
+    let _ = estimate_cr3_framing(&original, &original);
+    assert!(super::proxy::geometry_gate_scores().is_none());
+    assert!(super::proxy::geometry_framed_scores().is_none());
+}
+
+/// Rejected registration must preserve both input allocations and pixel bits. A
+/// missing/ineligible warp uses only the fallback search; an eligible warp adds
+/// exactly one search on different (warped) pixels, never repeats either search.
+#[test]
+fn cr3_unchanged_geometry_preserves_allocations_and_bounds_search_work() {
+    for (correction, searches) in [(None, 1), (Some(Default::default()), 1), (Some(synthetic_profile_lens()), 2)] {
+        let sensor = profile_geometry_scene(384, 256);
+        let reference = sensor.clone();
+        let mut mask = Rgb32f::new(sensor.width, sensor.height);
+        mask.data[17] = [1.0; 3];
+        let sensor_ptr = sensor.data.as_ptr();
+        let mask_ptr = mask.data.as_ptr();
+        let mask_bits: Vec<_> = mask.data.iter().map(|p| p.map(f32::to_bits)).collect();
+        super::proxy::take_framing_search_count();
+        let (aligned, aligned_mask, frame) = super::proxy::align_cr3_geometry(sensor, mask, &reference, correction.as_ref(), None);
+        assert!(frame.lens.is_none(), "rejected geometry must leave no lens mapping");
+        assert_eq!(super::proxy::take_framing_search_count(), searches, "bounded search budget for missing or rejected geometry");
+        assert_eq!(aligned.data.as_ptr(), sensor_ptr, "no accepted framing or warp: retain sensor allocation");
+        assert_eq!(aligned_mask.data.as_ptr(), mask_ptr, "no accepted framing or warp: retain mask allocation");
+        assert_eq!(aligned.data, reference.data);
+        assert_eq!(aligned_mask.data.iter().map(|p| p.map(f32::to_bits)).collect::<Vec<_>>(), mask_bits);
+    }
+}
+
+/// Exercise selection through the same orchestration as file-local and pooled
+/// fitting, including the proposal's comparisons with the framed fallback.
+#[test]
+fn cr3_geometry_selects_matching_profile_with_one_search_per_geometry() {
+    let sensor = profile_geometry_scene(384, 256);
+    let lens = synthetic_profile_lens();
+    let framing = Cr3Framing { scale: 0.95, offset: [0.006, -0.004] };
+    let expected = profile_geometry_target(&sensor, &lens, framing);
+    let mut reference = expected.clone();
+    reference.map_in_place(|p| p.map(|v| v.powf(0.7)));
+    let mask = Rgb32f::new(sensor.width, sensor.height);
+    let expected_mask = profile_geometry_target(&mask, &lens, framing);
+    super::proxy::take_framing_search_count();
+    let (aligned, aligned_mask, frame) = super::proxy::align_cr3_geometry(sensor, mask, &reference, Some(&lens), None);
+    assert_eq!(frame.lens, Some(&lens));
+    assert!(frame.framing.is_some());
+    assert_eq!(super::proxy::take_framing_search_count(), 2);
+    assert!(super::proxy::geometry_gate_scores().is_some(), "proposal passed original geometry gates");
+    assert!(super::proxy::geometry_framed_scores().is_some(), "proposal was compared with fallback on both splits");
+    assert_profile_geometry_mask(&aligned, &aligned_mask, &expected_mask);
+    assert!(geometry_rms(&aligned, &expected) < 0.008, "matching proposal selected despite nonlinear JPEG tone");
+}
+
+/// Check the full known valid crop, so the RMS cannot hide lost samples behind NaNs.
+fn assert_profile_geometry_mask(aligned: &Rgb32f, aligned_mask: &Rgb32f, expected_mask: &Rgb32f) {
+    assert_eq!((aligned.width, aligned.height), (expected_mask.width, expected_mask.height));
+    assert_eq!((aligned_mask.width, aligned_mask.height), (expected_mask.width, expected_mask.height));
+    assert_eq!(aligned.data.len(), expected_mask.data.len());
+    assert_eq!(aligned_mask.data.len(), expected_mask.data.len());
+    for (i, ((pixel, mask), expected)) in aligned.data.iter().zip(&aligned_mask.data).zip(&expected_mask.data).enumerate() {
+        // The barrel warp and inward framing used below keep the entire crop valid.
+        assert_eq!(*expected, [0.0; 3], "ground-truth crop must be valid and unclipped at {i}");
+        assert!(pixel.iter().all(|v| v.is_finite()), "alignment lost a valid ground-truth sample at {i}");
+        assert_eq!(*mask, *expected, "valid aligned pixels must retain the zero clip mask at {i}");
+    }
+}
+
+/// Forward accepted CR3 geometry through file-local fits, pooled pairs and DNG colour tags,
+/// using the same default-cropped sensor samples.
+#[test]
+fn cr3_profile_geometry_reaches_file_and_pooled_pairs_in_the_default_crop() {
+    let mut raw = profile_geometry_raw(&profile_geometry_scene(416, 288), [1.0; 3]);
+    raw.format = RawFormat::Cr3;
+    let transform = lightcraft_raw::color::camera_transform(&raw, D65);
+    assert!(transform.matrix_is_fallback);
+    let mut sensor = sensor_proxy(&raw, 2, 384).unwrap();
+    assert_eq!((sensor.width, sensor.height), (384, 256));
+    sensor.map_in_place(|p| transform.matrix.apply_f32(p));
+    let lens = synthetic_profile_lens();
+    let mut target = profile_geometry_target(&sensor, &lens, Cr3Framing { scale: 0.95, offset: [0.006, -0.004] });
+    target.map_in_place(|p| p.map(|v| v.powf(0.7)));
+    let file = profile_geometry_file(&target, craft_tiff::IfdBuilder::new());
+    let (plain, reference, _) = proxies(&raw, &file, &transform, PROXY, 0.0, None, None).unwrap();
+    let (mut aligned, _, _) = proxies(&raw, &file, &transform, PROXY, 0.0, None, Some(&lens)).unwrap();
+    let mut plain_render = plain;
+    plain_render.map_in_place(|p| p.map(|v| v.powf(0.7)));
+    aligned.map_in_place(|p| p.map(|v| v.powf(0.7)));
+    assert!(
+        geometry_rms(&aligned, &reference) < geometry_rms(&plain_render, &reference) * 0.3,
+        "the file-local route uses the resolved crop-relative correction"
+    );
+    let error = |pairs: Vec<([f64; 3], [f64; 3])>| {
+        let sum: f64 = pairs.iter().map(|(x, y)| transform.matrix.apply(*x).iter().zip(y).map(|(x, y)| (x.powf(0.7) - y).powi(2)).sum::<f64>()).sum();
+        sum / pairs.len() as f64
+    };
+    let plain_samples = profile_samples(&raw, &file, None, None).unwrap();
+    let aligned_samples = profile_samples(&raw, &file, None, Some(&lens)).unwrap();
+    let tone_error = |samples: &[([f64; 3], f64)]| {
+        assert!(!samples.is_empty());
+        samples
+            .iter()
+            .map(|(x, y)| {
+                let rgb = transform.matrix.apply(*x).map(|v| v.powf(0.7));
+                (luma(rgb) - y).powi(2)
+            })
+            .sum::<f64>()
+            / samples.len() as f64
+    };
+    assert!(tone_error(&aligned_samples.tone) < tone_error(&plain_samples.tone) * 0.1, "pooled tone samples use the selected geometry");
+    let before = error(plain_samples.colour);
+    let after = error(aligned_samples.colour);
+    assert!(after < before * 0.1, "pooled colour calibration uses the same geometry: {before} -> {after}");
+    // Merge / DNG conversion must encode the same calibrated colour as opening the RAW.
+    let mut opened = raw.clone();
+    let (_, t, look) = starting_colour(&mut opened, &file, None, Some(&lens));
+    assert!(look.is_some(), "the synthetic corrected preview supplies a camera look");
+    let scale = crate::files::WbScaleOf::new(raw.format, &raw.color, raw.wb_multipliers, &raw.metadata);
+    let white = scale.dng_white(&raw.color, lightcraft_raw::color::as_shot_white_xy(&raw));
+    let expected_tags = dng_colour(&raw.color, &white, &t, look.as_ref()).unwrap();
+    let tags = super::colour::starting_colour_tags_with_correction(&mut raw, &file, Some(&lens)).unwrap();
+    assert_eq!(tags, expected_tags, "DNG tags use the resolved correspondence geometry too");
+
+    assert_external_dng_vignette_contract(&raw, &sensor, &lens, &white);
+}
+
+/// Apply oriented CR3 geometry once, with white balance applied once, across all EXIF orientations.
+#[test]
+fn cr3_profile_geometry_shares_orientation_and_applies_white_balance_once() {
+    check_cr3_profile_geometry_orientation(false);
+}
+
+/// Keep the upstream source-position vignetting correction before CR3 profile geometry.
+#[test]
+fn cr3_vignetting_precedes_profile_geometry_in_every_orientation() {
+    check_cr3_profile_geometry_orientation(true);
+}
+
+fn check_cr3_profile_geometry_orientation(vignetted: bool) {
+    let mut scene = profile_geometry_scene(416, 288);
+    scene.map_in_place(|p| p.map(|v| v * 0.3));
+    let mut raw = profile_geometry_raw(&scene, [1.25, 1.0, 0.8]);
+    raw.format = RawFormat::Cr3;
+    let transform = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw));
+    assert!(transform.wb.windows(2).any(|v| (v[0] - v[1]).abs() > 0.01), "the fixture must exercise nonuniform as-shot WB");
+    assert!(transform.matrix_is_fallback);
+    let mut sensor = sensor_proxy(&raw, 2, 384).unwrap();
+    assert_eq!((sensor.width, sensor.height), (384, 256));
+    let mut lens = synthetic_profile_lens();
+    // A file-owned vignette is applied in full; a database vignette is measured separately below.
+    lens.source = lightcraft_develop::LensSource::File;
+    if vignetted {
+        lens.vignette =
+            Some(lightcraft_develop::EmbeddedVignette { k: [1.0, 0.0, 0.0, 0.0, 0.0], center: lightcraft_geom::Point::new(0.45, 0.55), radius: 0.6 });
+    }
+    super::look_fit::correct_vignetting(&mut sensor, Some(&lens), lightcraft_geom::Orientation::Normal);
+    sensor.map_in_place(|p| {
+        transform.matrix.apply_f32(std::array::from_fn(|i| p[i] * transform.wb[i] * 2f32.powf(transform.baseline_exposure as f32)))
+    });
+    let mut target = profile_geometry_target(&sensor, &lens, Cr3Framing { scale: 0.95, offset: [0.006, -0.004] });
+    target.map_in_place(|p| p.map(|v| v.powf(0.7)));
+    let to_srgb = lightcraft_color::SRGB.from_xyz().mul(&REC2020.to_xyz());
+    let jpeg_range = target
+        .data
+        .iter()
+        .filter(|p| p.iter().all(|v| v.is_finite()))
+        .flat_map(|p| to_srgb.apply_f32(*p))
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), v| (lo.min(v), hi.max(v)));
+    assert!(jpeg_range.0 >= 0.0 && jpeg_range.1 <= 1.0, "the generated reference must not clip: {jpeg_range:?}");
+    let file = profile_geometry_file(&target, craft_tiff::IfdBuilder::new());
+    for exif in 1..=8 {
+        let orientation = lightcraft_geom::Orientation::from_exif(exif);
+        raw.orientation = orientation;
+        let oriented_lens = lightcraft_pipeline::optics::reorient_lens(&lens, orientation, 384.0, 256.0);
+        let (aligned, reference, clipped) = proxies(&raw, &file, &transform, PROFILE_PROXY, 0.0, None, Some(&oriented_lens)).unwrap();
+        if vignetted && exif == 6 {
+            let sensor = without_clipped(&aligned, &clipped).unwrap_or_else(|| aligned.clone());
+            let to_camera = transform.matrix.inverse().unwrap();
+            let expected = samples_from_proxies(&sensor, &reference, &to_camera).unwrap();
+            let samples = profile_samples(&raw, &file, None, Some(&oriented_lens)).unwrap();
+            assert!(!expected.colour.is_empty() && !expected.tone.is_empty());
+            assert!(
+                samples.colour == expected.colour && samples.tone == expected.tone,
+                "both pooled inputs keep the source-position vignette of the accepted warp in a rotated crop"
+            );
+
+            // The JPEG was generated with half this database gain. Measure it through the normal per-file path.
+            let mut database = oriented_lens;
+            database.source = lightcraft_develop::LensSource::Database;
+            let vignette = database.vignette.as_mut().unwrap();
+            vignette.k[0] *= 2.0;
+            let vignette = *vignette;
+            let warp_only = lightcraft_develop::EmbeddedLens { vignette: None, ..database };
+            let (unshaded, jpeg, mask, frame) =
+                super::proxy::framed_proxies(&raw, &file, &transform, PROXY, 0.0, None, super::proxy::ProxyLens::PerFile(Some(&warp_only))).unwrap();
+            assert!(frame.lens.is_some(), "the lens warp wins before measuring its shading");
+            let framing = frame.framing.unwrap();
+            let amount = camera_vignetting_amount(&unshaded, &jpeg, &mask, &vignette, frame);
+            assert!((0.3..=0.7).contains(&amount), "partially corrected JPEG, measured {amount}");
+            let (measured, _, _) = super::look_fit::look_proxies(&raw, &file, &transform, None, Some(&database)).unwrap();
+            let (w, h) = (unshaded.width, unshaded.height);
+            let mut warp = lightcraft_pipeline::optics::Warp::identity(w as f64, h as f64);
+            warp.lens = Some(database);
+            warp.lens_dist = 1.0;
+            for (i, (before, after)) in unshaded.data.iter().zip(&measured.data).enumerate() {
+                let (x, y) = framing.source((i % w) as f32 + 0.5, (i / w) as f32 + 0.5, w, h);
+                let source = warp.corrected_to_source(lightcraft_geom::Point::new(f64::from(x), f64::from(y)), 1);
+                let gain = lightcraft_pipeline::optics::embedded_vignette_gain(&vignette, source, w as f64, h as f64);
+                let expected = before.map(|v| v * (1.0 + amount * (gain - 1.0)) as f32);
+                assert_eq!(*after, expected, "database shading uses the selected sensor position at pixel {i}");
+            }
+        }
+        let mut no_warp = oriented_lens;
+        no_warp.warp = None;
+        let (baseline, _, _) = proxies(&raw, &file, &transform, PROFILE_PROXY, 0.0, None, Some(&no_warp)).unwrap();
+        assert!(
+            aligned.data.iter().flatten().zip(baseline.data.iter().flatten()).any(|(a, b)| a.to_bits() != b.to_bits()),
+            "orientation {exif}: profile geometry must be accepted with identical vignetting on both routes"
+        );
+        let mut displayed = aligned.clone();
+        displayed.map_in_place(|p| p.map(|v| v.powf(0.7)));
+        let rms = geometry_rms(&displayed, &reference);
+        assert!(rms < 0.009, "orientation {exif}: WB exactly once and matching frames: {rms}");
+        let oriented_target = target.clone().into_oriented(orientation);
+        let expected = reference_at(&oriented_target, &aligned);
+        assert!(geometry_rms(&displayed, &expected) < 0.009, "orientation {exif}: absolute oriented ground truth");
+        // Missing geometry must take the same established CR3 framing path as a rejected profile.
+        let (plain, plain_ref, plain_clip) = proxies(&raw, &file, &transform, PROXY, 0.0, None, None).unwrap();
+        let (fallback, fallback_ref, fallback_clip) = proxies(&raw, &file, &transform, PROXY, 0.0, None, Some(&Default::default())).unwrap();
+        assert_eq!(plain.data, fallback.data);
+        assert_eq!(plain_ref.data, fallback_ref.data);
+        assert_eq!(plain_clip, fallback_clip);
+    }
+}
+
+/// Sensor, JPEG and clipping samples returned by the diagnostic proxy calls.
+type DiagnosticProxy = (Rgb32f, Rgb32f, Vec<bool>);
+
+/// Keep diagnostic TSV fields single-line and reversible, including literal backslashes.
+fn diagnostic_tsv_field(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('\t', "\\t").replace('\r', "\\r").replace('\n', "\\n")
+}
+
+/// Derive the PNG path from the native filename. Lossy text is used only for display in geometry.tsv.
+fn diagnostic_png_path(output: &std::path::Path, name: &std::ffi::OsStr, label: &str) -> std::path::PathBuf {
+    let mut png = name.to_owned();
+    png.push(format!("-{label}.png"));
+    output.join(png)
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn cr3_diagnostics_preserve_distinct_native_filenames() {
+    #[cfg(unix)]
+    let names = {
+        use std::os::unix::ffi::OsStrExt;
+        [b"A\x80.CR3", b"A\x81.CR3"].map(|bytes| std::ffi::OsStr::from_bytes(bytes).to_owned())
+    };
+    #[cfg(windows)]
+    let names = {
+        use std::os::windows::ffi::OsStringExt;
+        [0xd800, 0xd801].map(|unit| std::ffi::OsString::from_wide(&[65, unit, 46, 67, 82, 51]))
+    };
+    let output = std::path::Path::new("diagnostics");
+    assert_eq!(names[0].to_string_lossy(), names[1].to_string_lossy());
+    for label in ["plain", "chosen", "jpeg"] {
+        assert_ne!(diagnostic_png_path(output, &names[0], label), diagnostic_png_path(output, &names[1], label));
+    }
+}
+
+/// Remove only this source's three owned output files; filesystem errors must stop the diagnostic.
+fn remove_diagnostic_pngs(output: &std::path::Path, name: &std::ffi::OsStr) -> std::io::Result<()> {
+    for label in ["plain", "chosen", "jpeg"] {
+        match std::fs::remove_file(diagnostic_png_path(output, name, label)) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+/// Preserve missing-proxy cases in the diagnostic TSV without inventing geometry or fit results.
+/// `proxies` exposes no rejection reason, so the row records only which call returned `None`.
+fn diagnostic_proxies_or_report(
+    output: &std::path::Path,
+    name: impl AsRef<std::ffi::OsStr>,
+    raw: &RawImage,
+    profile_warp: bool,
+    plain: Option<DiagnosticProxy>,
+    chosen: Option<DiagnosticProxy>,
+    report: &mut String,
+) -> std::io::Result<Option<(DiagnosticProxy, DiagnosticProxy)>> {
+    let name = name.as_ref();
+    let status = match (plain, chosen) {
+        (Some(plain), Some(chosen)) => return Ok(Some((plain, chosen))),
+        (None, Some(_)) => "missing_plain_proxy",
+        (Some(_), None) => "missing_chosen_proxy",
+        (None, None) => "missing_both_proxies",
+    };
+    remove_diagnostic_pngs(output, name)?;
+    let mut fields = vec![String::new(); 17];
+    fields[0] = diagnostic_tsv_field(&name.to_string_lossy());
+    fields[1] = diagnostic_tsv_field(raw.metadata.model.as_deref().unwrap_or(""));
+    fields[2] = format!("{:?}", raw.orientation);
+    fields[3] = profile_warp.to_string();
+    fields[15] = status.to_owned();
+    fields[16] = "proxies returned None; underlying cause unavailable".to_owned();
+    report.push_str(&fields.join("\t"));
+    report.push('\n');
+    Ok(None)
+}
+
+/// Build a small RGB CR3-shaped raw and embedded JPEG without opening any real photo.
+fn diagnostic_proxy_fixture() -> (RawImage, Vec<u8>) {
+    let scene = profile_geometry_scene(96, 64);
+    let mut raw = profile_geometry_raw(&scene, [1.0; 3]);
+    raw.format = RawFormat::Cr3;
+    raw.crop = raw.active_area;
+    let file = profile_geometry_file(&scene, craft_tiff::IfdBuilder::new());
+    (raw, file)
+}
+
+/// Exercise the corpus diagnostic's actual proxy-result handling across missing and available inputs.
+#[test]
+fn cr3_diagnostics_report_missing_proxies_and_continue() {
+    let output = std::env::temp_dir().join(format!("lc-cr3-missing-{}", std::process::id()));
+    let (mut raw, bytes) = diagnostic_proxy_fixture();
+    let transform = lightcraft_raw::color::camera_transform(&raw, D65);
+    let available = proxies(&raw, &bytes, &transform, PROXY, 0.0, None, None).unwrap();
+    // A valid spectral transform does not guarantee a usable sensor proxy. This synthetic
+    // single-channel raw lacks a CFA, so the established proxy path deliberately returns None.
+    let camera = lightcraft_raw::spectral::find(Some("Canon"), "Canon EOS R8").unwrap();
+    raw.color.color_matrix = camera.color_matrix.map(Some);
+    raw.color.forward_matrix = camera.forward_matrix.map(Some);
+    raw.color.illuminant = [17, 21];
+    raw.cpp = 1;
+    raw.data = lightcraft_raw::RawData::U16(vec![0; raw.width * raw.height]);
+    let calibrated = lightcraft_raw::color::camera_transform(&raw, D65);
+    assert!(!calibrated.matrix_is_fallback);
+    let missing = proxies(&raw, &bytes, &calibrated, PROXY, 0.0, None, None);
+    assert!(missing.is_none());
+    let mut report = String::new();
+    for (plain, chosen, status) in [
+        (missing.clone(), missing.clone(), "missing_both_proxies"),
+        (missing.clone(), Some(available.clone()), "missing_plain_proxy"),
+        (Some(available.clone()), missing, "missing_chosen_proxy"),
+    ] {
+        assert!(diagnostic_proxies_or_report(&output, status, &raw, true, plain, chosen, &mut report).unwrap().is_none());
+    }
+    let (plain, chosen) =
+        diagnostic_proxies_or_report(&output, "available", &raw, false, Some(available.clone()), Some(available.clone()), &mut report)
+            .unwrap()
+            .expect("a later usable file must still reach measurement and image export");
+    let bits = |image: &Rgb32f| image.data.iter().flatten().map(|v| v.to_bits()).collect::<Vec<_>>();
+    assert_eq!(bits(&plain.0), bits(&available.0));
+    assert_eq!(chosen.1.data, available.1.data);
+    let rows: Vec<_> = report.lines().collect();
+    assert_eq!(rows.len(), 3, "available proxies must not create an unavailable row");
+    for row in rows {
+        let fields: Vec<_> = row.split('\t').collect();
+        assert_eq!(fields.len(), 17);
+        assert_eq!(fields[0], fields[15], "all three missing cases retain distinct statuses");
+        assert!(fields[4..15].iter().all(|v| v.is_empty()), "unavailable metrics, gates and fits stay empty");
+        assert_eq!(fields[16], "proxies returned None; underlying cause unavailable");
+    }
+}
+
+/// Tabs, line endings and literal escape sequences remain distinguishable without changing the TSV schema.
+#[test]
+fn cr3_diagnostics_escape_text_fields_in_missing_rows() {
+    let name = "A\tB\nC\rD\\t.CR3";
+    let model = "Camera\tmodel\nline\rreturn\\n";
+    assert_eq!(diagnostic_tsv_field(name), r"A\tB\nC\rD\\t.CR3");
+    assert_eq!(diagnostic_tsv_field(model), r"Camera\tmodel\nline\rreturn\\n");
+    let (mut raw, _) = diagnostic_proxy_fixture();
+    raw.metadata.model = Some(model.into());
+    let output = std::env::temp_dir().join(format!("lc-cr3-tsv-{}", std::process::id()));
+    let mut report = String::new();
+    assert!(diagnostic_proxies_or_report(&output, name, &raw, false, None, None, &mut report).unwrap().is_none());
+    assert_eq!(report.lines().count(), 1);
+    let fields: Vec<_> = report.trim_end_matches('\n').split('\t').collect();
+    assert_eq!(fields.len(), 17);
+    assert_eq!(fields[0], diagnostic_tsv_field(name));
+    assert_eq!(fields[1], diagnostic_tsv_field(model));
+    assert_eq!(fields[15], "missing_both_proxies");
+    assert_eq!(fields[16], "proxies returned None; underlying cause unavailable");
+}
+
+/// A missing-proxy rerun removes old owned PNGs and preserves unrelated files and directories.
+#[test]
+fn cr3_diagnostics_missing_rerun_removes_stale_pngs() {
+    let output = std::env::temp_dir().join(format!("lc-cr3-rerun-{}", std::process::id()));
+    std::fs::create_dir_all(&output).unwrap();
+    let pixels = [23u8, 41, 59];
+    let image = lightcraft_codecs::EncodeImage::new(1, 1, 3, lightcraft_codecs::Samples::U8(&pixels));
+    let png = lightcraft_codecs::encode_png(&image, &Default::default()).unwrap();
+    for label in ["plain", "chosen", "jpeg"] {
+        std::fs::write(output.join(format!("A.CR3-{label}.png")), &png).unwrap();
+    }
+    std::fs::write(output.join("other.png"), &png).unwrap();
+    std::fs::create_dir_all(output.join("other-directory")).unwrap();
+    let (raw, _) = diagnostic_proxy_fixture();
+    let mut report = String::new();
+    assert!(diagnostic_proxies_or_report(&output, "A.CR3", &raw, true, None, None, &mut report).unwrap().is_none());
+    std::fs::write(output.join("geometry.tsv"), &report).unwrap();
+    assert_eq!(std::fs::read_to_string(output.join("geometry.tsv")).unwrap(), report);
+    let fields: Vec<_> = report.trim_end_matches('\n').split('\t').collect();
+    assert_eq!(fields.len(), 17);
+    assert_eq!(fields[0], "A.CR3");
+    assert_eq!(fields[15], "missing_both_proxies");
+    for label in ["plain", "chosen", "jpeg"] {
+        assert!(!output.join(format!("A.CR3-{label}.png")).exists(), "no earlier PNG can appear current");
+    }
+    assert_eq!(std::fs::read(output.join("other.png")).unwrap(), png);
+    assert!(output.join("other-directory").is_dir());
+    // A directory occupying an owned filename is an error, never a request for recursive deletion.
+    std::fs::create_dir(output.join("A.CR3-plain.png")).unwrap();
+    let before = report.clone();
+    assert!(diagnostic_proxies_or_report(&output, "A.CR3", &raw, true, None, None, &mut report).is_err());
+    assert_eq!(report, before, "failed cleanup must not publish a misleading missing-result row");
+    assert!(output.join("A.CR3-plain.png").is_dir());
+    std::fs::remove_dir_all(output).unwrap();
+}
+
+/// Opt-in diagnostic only: never opens the app or changes a catalogue. It exports the actual
+/// selected correspondences, and reports rejection as rejection rather than decoder success.
+#[test]
+#[ignore = "explicit local corpus diagnostic; requires LIGHTCRAFT_CR3_DIAGNOSTICS and LIGHTCRAFT_CORPUS"]
+fn corpus_cr3_profile_geometry_diagnostics() {
+    let output = std::env::var_os("LIGHTCRAFT_CR3_DIAGNOSTICS").expect("explicit diagnostics require an output directory");
+    let corpus = std::path::PathBuf::from(std::env::var_os("LIGHTCRAFT_CORPUS").expect("diagnostics require a corpus"));
+    let output = std::path::PathBuf::from(output);
+    std::fs::create_dir_all(&output).unwrap();
+    let mut report = String::from(
+        "file\tmodel\torientation\tprofile_warp\tgeometry_accepted\tplain_alignment\tchosen_alignment\tplain_structure\tchosen_structure\tplain_pairs\tchosen_pairs\tplain_look\tchosen_look\tframed_gate_scores\toriginal_gate_scores\tstatus\treason\n",
+    );
+    let mut paths: Vec<_> = std::fs::read_dir(corpus.join("raw"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("cr3")))
+        .collect();
+    paths.sort();
+    assert!(!paths.is_empty(), "diagnostic corpus must contain CR3 files");
+    for path in paths {
+        let bytes = std::fs::read(&path).unwrap();
+        let mut raw = lightcraft_raw::decode(&bytes).unwrap();
+        let correction = crate::lens_profiles::for_raw(&raw.info(), || lightcraft_meta::extract(&bytes));
+        let lens = lens_geometry(&raw.opcodes.list3);
+        raw.opcodes.list3.retain(|op| !op.is_lens_correction());
+        let transform = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw));
+        // Compare geometry with identical source-position vignetting on both routes.
+        let plain_correction = correction.map(|mut lens| {
+            lens.warp = None;
+            lens
+        });
+        let plain = super::look_fit::look_proxies(&raw, &bytes, &transform, lens.as_ref(), plain_correction.as_ref());
+        let chosen = super::look_fit::look_proxies(&raw, &bytes, &transform, lens.as_ref(), correction.as_ref());
+        let name = path.file_name().unwrap();
+        let profile_warp = correction.as_ref().is_some_and(|l| l.warp.is_some());
+        let Some((plain, chosen)) = diagnostic_proxies_or_report(&output, name, &raw, profile_warp, plain, chosen, &mut report).unwrap() else {
+            std::fs::write(output.join("geometry.tsv"), &report).unwrap();
+            continue;
+        };
+        let framed_scores = super::proxy::geometry_framed_scores();
+        let original_scores = if profile_warp { super::proxy::geometry_gate_scores() } else { None };
+        let accepted = plain.0.data.iter().flatten().zip(chosen.0.data.iter().flatten()).any(|(a, b)| a.to_bits() != b.to_bits());
+        let pairs = |v: &(Rgb32f, Rgb32f, Vec<bool>)| {
+            let sensor = without_clipped(&v.0, &v.2).unwrap_or_else(|| v.0.clone());
+            collect_pairs(&sensor, &v.1, 0.05, None, false).map_or(0, |v| v.0.len())
+        };
+        let before = fit_preview(&raw, &bytes, &transform, lens.as_ref(), plain_correction.as_ref()).0.is_some();
+        let after = fit_preview(&raw, &bytes, &transform, lens.as_ref(), correction.as_ref()).0.is_some();
+        report.push_str(&format!(
+            "{}\t{}\t{:?}\t{}\t{accepted}\t{:.6}\t{:.6}\t{}\t{}\t{}\t{}\t{before}\t{after}\t{framed_scores:?}\t{original_scores:?}\tmeasured\t\n",
+            diagnostic_tsv_field(&name.to_string_lossy()),
+            diagnostic_tsv_field(raw.metadata.model.as_deref().unwrap_or("")),
+            raw.orientation,
+            profile_warp,
+            alignment(&plain.0, &plain.1),
+            alignment(&chosen.0, &chosen.1),
+            structure_agrees(&plain.0, &plain.1),
+            structure_agrees(&chosen.0, &chosen.1),
+            pairs(&plain),
+            pairs(&chosen)
+        ));
+        for (label, image) in [("plain", &plain.0), ("chosen", &chosen.0), ("jpeg", &chosen.1)] {
+            let to_srgb = lightcraft_color::SRGB.from_xyz().mul(&REC2020.to_xyz());
+            let pixels: Vec<u8> = image
+                .data
+                .iter()
+                .flat_map(|p| {
+                    to_srgb.apply_f32(*p).map(|v| {
+                        let v = if v.is_finite() { v.max(0.0) } else { 0.0 };
+                        let v = if v <= 0.0031308 { 12.92 * v } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
+                        (v.clamp(0.0, 1.0) * 255.0).round() as u8
+                    })
+                })
+                .collect();
+            let image = lightcraft_codecs::EncodeImage::new(image.width as u32, image.height as u32, 3, lightcraft_codecs::Samples::U8(&pixels));
+            std::fs::write(diagnostic_png_path(&output, name, label), lightcraft_codecs::encode_png(&image, &Default::default()).unwrap()).unwrap();
+        }
+        std::fs::write(output.join("geometry.tsv"), &report).unwrap();
+    }
+}
+
+/// Keep the accepted CR3 framing fallback when a proposed profile warp fails its paired comparison.
+#[test]
+fn cr3_rejected_profile_preserves_accepted_framing_fallback() {
+    let mut raw = profile_geometry_raw(&profile_geometry_scene(416, 288), [1.25, 1.0, 0.8]);
+    raw.format = RawFormat::Cr3;
+    let transform = lightcraft_raw::color::camera_transform(&raw, D65);
+    assert!(transform.matrix_is_fallback);
+    let mut sensor = sensor_proxy(&raw, 2, 384).unwrap();
+    assert_eq!((sensor.width, sensor.height), (384, 256));
+    sensor.map_in_place(|p| {
+        transform.matrix.apply_f32(std::array::from_fn(|i| p[i] * transform.wb[i] * 2f32.powf(transform.baseline_exposure as f32)))
+    });
+    let lens = synthetic_profile_lens();
+    let mut target = profile_geometry_target(&sensor, &Default::default(), Cr3Framing { scale: 0.95, offset: [0.006, -0.004] });
+    target.map_in_place(|p| p.map(|v| v.powf(0.7)));
+    let file = profile_geometry_file(&target, craft_tiff::IfdBuilder::new());
+    let original_only = align_profile_geometry(&sensor, &Rgb32f::new(384, 256), &target, &lens, lightcraft_geom::Orientation::Normal);
+    assert!(original_only.is_some(), "this moderate wrong-lens proposal clears original-only gates, so the framed guard is necessary");
+    let (plain, reference, mask) = proxies(&raw, &file, &transform, PROXY, 0.0, None, None).unwrap();
+    let (fallback, fallback_reference, fallback_mask) = proxies(&raw, &file, &transform, PROXY, 0.0, None, Some(&lens)).unwrap();
+    let mut comparison = plain.clone();
+    comparison.map_in_place(|p| p.map(|v| v.powf(0.7)));
+    assert!(geometry_rms(&comparison, &reference) < 0.009, "existing framing fallback still aligns this JPEG");
+    assert!(
+        plain.data.iter().flatten().zip(fallback.data.iter().flatten()).all(|(a, b)| a.to_bits() == b.to_bits()),
+        "wrong lens must be rejected before established framing"
+    );
+    assert_eq!(reference.data, fallback_reference.data);
+    assert_eq!(mask, fallback_mask);
+
+    let plain_samples = profile_samples(&raw, &file, None, None).unwrap();
+    assert!(!plain_samples.colour.is_empty() && !plain_samples.tone.is_empty());
+    let mut correction = lens;
+    correction.vignette =
+        Some(lightcraft_develop::EmbeddedVignette { k: [0.15, 0.0, 0.0, 0.0, 0.0], center: lightcraft_geom::Point::new(0.5, 0.5), radius: 0.6 });
+    correction.source = lightcraft_develop::LensSource::Database;
+    let no_warp = lightcraft_develop::EmbeddedLens { warp: None, ..correction };
+    let measured = super::look_fit::look_proxies(&raw, &file, &transform, None, Some(&no_warp)).unwrap();
+    let rejected = super::look_fit::look_proxies(&raw, &file, &transform, None, Some(&correction)).unwrap();
+    assert_eq!(measured.0.data, rejected.0.data, "rejection preserves the database-vignette measurement on the original framing");
+    assert_eq!(measured.2, rejected.2);
+    let rejected_warp = correction.warp;
+    for (case, warp) in [("rejected warp", rejected_warp), ("absent warp", None)] {
+        correction.warp = warp;
+        let samples = profile_samples(&raw, &file, None, Some(&correction)).unwrap();
+        assert!(
+            samples.colour == plain_samples.colour && samples.tone == plain_samples.tone,
+            "{case} must preserve both original pooled inputs with a nonzero vignette"
+        );
+    }
 }
 
 /// The guarded fit is assessed on real sensor data, never on the JPEG fallback. A corpus
@@ -3596,7 +4146,7 @@ fn the_vignetting_gain_of_a_framed_proxy_is_taken_where_its_pixels_come_from() {
     let vignette = EmbeddedVignette { k: [2.0, 1.0, 0.0, 0.0, 0.0], center: lightcraft_geom::Point::new(0.5, 0.5), radius: 0.6 };
     let (w, h) = (96, 64);
     let framing = Cr3Framing { scale: 0.92, offset: [0.02, -0.015] };
-    let frame = ProxyFrame { orientation: lightcraft_geom::Orientation::Normal, framing: Some(framing) };
+    let frame = ProxyFrame { orientation: lightcraft_geom::Orientation::Normal, framing: Some(framing), lens: None };
     let gains = vignetting_gains(&Rgb32f::new(w, h), &vignette, frame);
     for i in [0, w - 1, w * h / 2 + w / 3, w * h - 1] {
         let (x, y) = framing.source((i % w) as f32 + 0.5, (i / w) as f32 + 0.5, w, h);
@@ -3738,7 +4288,7 @@ fn camera_vignetting_amount_follows_a_cr3_proxys_framing() {
     }
     let clipped = vec![false; w * h];
     let measure = |reference: &Rgb32f, framing: Option<Cr3Framing>| {
-        camera_vignetting_amount(&sensor, reference, &clipped, &vignette, ProxyFrame { orientation: Orientation::Normal, framing })
+        camera_vignetting_amount(&sensor, reference, &clipped, &vignette, ProxyFrame { orientation: Orientation::Normal, framing, lens: None })
     };
     for shown in [0.0f32, 0.75, 1.0] {
         let mut reference = sensor.clone();

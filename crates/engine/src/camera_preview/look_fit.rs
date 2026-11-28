@@ -325,7 +325,7 @@ pub(super) fn database_vignetting(
     reference: &Rgb32f,
     clipped: &[bool],
     vignette: &lightcraft_develop::EmbeddedVignette,
-    frame: ProxyFrame,
+    frame: ProxyFrame<'_>,
 ) {
     let amount = camera_vignetting_amount(sensor, reference, clipped, vignette, frame);
     apply_vignetting(sensor, vignette, frame, amount);
@@ -338,15 +338,17 @@ pub(super) fn database_vignetting(
 /// moved to its camera JPEG's framing, [`super::proxy::framed_proxies`]) takes each pixel to the position it shows, and
 /// `orientation` maps that position to the oriented frame.
 #[derive(Clone, Copy, Debug)]
-pub(super) struct ProxyFrame {
+pub(super) struct ProxyFrame<'a> {
     pub(super) orientation: lightcraft_geom::Orientation,
     pub(super) framing: Option<Cr3Framing>,
+    /// Accepted lens warp in the oriented CR3 crop, applied after the JPEG framing.
+    pub(super) lens: Option<&'a lightcraft_develop::EmbeddedLens>,
 }
 
-impl ProxyFrame {
+impl ProxyFrame<'_> {
     /// A proxy whose pixels are where they were sampled, in the frame `orientation` maps to the oriented one.
     pub(super) fn new(orientation: lightcraft_geom::Orientation) -> Self {
-        Self { orientation, framing: None }
+        Self { orientation, framing: None, lens: None }
     }
 }
 
@@ -404,7 +406,7 @@ pub(super) fn camera_vignetting_amount(
     reference: &Rgb32f,
     clipped: &[bool],
     vignette: &lightcraft_develop::EmbeddedVignette,
-    frame: ProxyFrame,
+    frame: ProxyFrame<'_>,
 ) -> f64 {
     vignetting_amount_from_gains(sensor, reference, clipped, vignetting_gains(sensor, vignette, frame))
 }
@@ -450,10 +452,11 @@ pub(super) fn vignetting_amount_from_gains(sensor: &Rgb32f, reference: &Rgb32f, 
 
 /// The render's vignetting gain (`optics::embedded_vignette_gain`) at each pixel of `sensor`, at the position `frame`
 /// gives it in the oriented, cropped frame `vignette` is in.
-pub(super) fn vignetting_gains(sensor: &Rgb32f, vignette: &lightcraft_develop::EmbeddedVignette, frame: ProxyFrame) -> Vec<f64> {
+pub(super) fn vignetting_gains(sensor: &Rgb32f, vignette: &lightcraft_develop::EmbeddedVignette, frame: ProxyFrame<'_>) -> Vec<f64> {
     let (w, h) = (sensor.width as f64, sensor.height as f64);
     let (ow, oh) = if frame.orientation.swaps_axes() { (h, w) } else { (w, h) };
     let width = sensor.width.max(1);
+    let warp = frame.lens.map(|lens| super::proxy::profile_warp(lens, ow, oh));
     (0..sensor.data.len())
         .map(|i| {
             let (px, py) = ((i % width) as f64 + 0.5, (i / width) as f64 + 0.5);
@@ -465,13 +468,15 @@ pub(super) fn vignetting_gains(sensor: &Rgb32f, vignette: &lightcraft_develop::E
                 None => (px, py),
             };
             let (x, y) = frame.orientation.map(px, py, w, h);
-            lightcraft_pipeline::optics::embedded_vignette_gain(vignette, lightcraft_geom::Point::new(x, y), ow, oh)
+            let point = lightcraft_geom::Point::new(x, y);
+            let point = warp.as_ref().map_or(point, |warp| warp.corrected_to_source(point, 1));
+            lightcraft_pipeline::optics::embedded_vignette_gain(vignette, point, ow, oh)
         })
         .collect()
 }
 
 /// Multiply `sensor` by `amount` of `vignette`'s correction, as the Vignetting amount slider scales it.
-pub(super) fn apply_vignetting(sensor: &mut Rgb32f, vignette: &lightcraft_develop::EmbeddedVignette, frame: ProxyFrame, amount: f64) {
+pub(super) fn apply_vignetting(sensor: &mut Rgb32f, vignette: &lightcraft_develop::EmbeddedVignette, frame: ProxyFrame<'_>, amount: f64) {
     let gains = vignetting_gains(sensor, vignette, frame);
     for (p, g) in sensor.data.iter_mut().zip(gains) {
         let gain = (1.0 + (g - 1.0) * amount) as f32;

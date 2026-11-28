@@ -1,0 +1,80 @@
+# CR3 profile correspondence geometry
+
+A Canon CR3 can pair different scene points when the camera corrects radial distortion in its
+embedded JPEG. During colour calibration, LightCraft compares a resolved lens profile with the
+framing it already estimated from the unwarped sensor. The selected geometry determines which
+sensor and JPEG samples train the look. The RAW decoder and the Optics setting still determine
+how LightCraft renders the photograph.
+
+A resolved external lens profile may propose geometry only for file-local colour calibration
+and pooled camera-profile samples, with a fallback camera matrix and no in-file lens warp. The sensor, sensor clip mask, and embedded JPEG are
+oriented together before evaluating the already oriented lens profile. White balance and
+baseline exposure are applied exactly once before geometry assessment.
+
+The existing fixed-proxy edge test, bounded framing search (scale 0.9–1.1 and translation up to
+two proxy pixels), minimum edge coverage, 0.9 agreement, and independent held-out improvement
+of at least 0.04 are retained. Geometry uses luminance edge directions, without fitting RGB
+values. Accepted geometry moves the sensor and clip mask together; invalid borders remain NaN.
+CR3 proposals must also preserve or improve agreement against the existing framed fallback
+on both training and held-out edges, compared on the exact intersection of valid edges with
+the same reference weights. The published minimum 0.04 improvement over the unframed sensor
+is retained separately, using the exact intersection of original and candidate edges and the same
+reference weights for each candidate during training and for the held-out check. The fallback
+comparison adds no extra improvement threshold. Rejected or absent geometry takes the existing
+CR3 framing path. All subsequent colour,
+tone, hue/saturation, clipping, and held-out acceptance gates stay unchanged.
+
+The proposal reaches file-local colour and tone, pooled colour pairs and tone samples, and colour tags
+for merge/DNG conversion. The DNG colour fit uses the external profile for correspondence geometry
+without its vignette gains: the unchanged sensor samples and the DNG writer do not carry that
+database shading correction. The file-local fit measures the share of database shading visible in the JPEG
+after registration, using each pixel’s source position under the selected framing and warp. Pooled fits apply
+the profile’s vignette to an accepted warp. A missing or rejected warp preserves both the unshaded colour
+pairs and the tone samples from the original framing.
+The loaded database semantic identity also invalidates camera render/view keys, Smart-preview
+headers and scan markers. Fresh original decodes retain the photo’s hot-pixel setting; offline
+proxies remain readable and cannot be relabelled as freshly fitted pixels.
+Embedded vignetting is still applied at the source before geometry. No camera allowlist,
+new profile matching rules, or weaker acceptance gate is introduced. Other RAW formats continue to use the existing correspondence and fixed-mount lookup rules.
+
+Profile resolution uses the shared lens resolver, including the downloaded database or
+`LIGHTCRAFT_LENSFUN_DIR` override and its reload support. Unknown crop factors remain
+unknown under the upstream optional-crop API; this change adds no crop-factor fallback.
+
+Synthetic tests cover lens-only and lens-plus-framing acceptance, unrelated/flat/already aligned
+rejection, crop-relative profile orientation at multiple resolutions, clip-mask contributions,
+and the complete CR3 correspondence route for EXIF orientations 1–8 with non-unity white balance.
+The opt-in `corpus_cr3_profile_geometry_diagnostics` test exports `geometry.tsv` and plain,
+selected, and JPEG proxy PNGs when `LIGHTCRAFT_CR3_DIAGNOSTICS` names an output directory.
+The plain diagnostic route removes only the proposed profile warp. Both routes use the same lens vignetting data.
+It reads CR3 files from `$LIGHTCRAFT_CORPUS/raw` and the normal configured lens database.
+The TSV appends `status` and `reason` columns. `measured` means both proxy calls returned
+images; acceptance or rejection is recorded separately in the existing measurement columns.
+If either call returns no proxy, the row records `missing_plain_proxy`,
+`missing_chosen_proxy`, or `missing_both_proxies`, leaves all measurement fields empty,
+and exports no PNGs for that file. The diagnostic continues with the next CR3. The reason
+does not attribute a cause: the proxy API returns only `None`, which can cover unavailable
+previews or sensor proxies. An unavailable row is not a passed geometry or colour check.
+The PNGs show linear proxy RGB converted to sRGB, without a camera tone curve; they are geometry
+inspection aids, not developed image fidelity comparisons. The public-sample assessment below covers both a selected warp and a retained fallback.
+Its results apply to those samples and camera settings.
+
+## Historical public-sample assessment
+
+The pre-synchronization assessment used 22 SHA-256-verified, individually CC0-listed raw.pixls.us CR3 files using lensfun
+XML data at `43f9e001`. In that assessment, the R100 RAW/C-RAW pair with RF-S18–45 at 18 mm accepts the
+new geometry. The other 20 files retain pixel-identical 1600-pixel renders with optics
+on/off, including eight R6 Mark II full-frame/crop, RAW/C-RAW and Dual-Pixel variants
+of one scene. All 22 retain identical renders without a lens database.
+
+With the same independent baseline-derived radial registration applied to both
+outputs, mean DE76 at 768×512 versus the embedded JPEG improves 4.54 to 3.79 (R100 RAW)
+and 4.15 to 3.79 (C-RAW) with optics on. Unregistered whole-frame error slightly worsens
+because optical framing still differs. This is a modest calibration benefit and does
+not remove the photograph's visible lens distortion. The camera JPEG is not a
+colorimetric reference. Four 24 MP files (R100 RAW/C-RAW and R6 II full-frame RAW/C-RAW)
+render on CPU/Metal within 1/255 per channel, with optics on/off.
+
+The sample set does not establish all-camera correctness. R6 II’s eight variants
+share one scene, not eight independent scenes. Pooled-profile and DNG-tag forwarding
+are tested synthetically; this is not a real multi-camera calibration or DNG roundtrip.

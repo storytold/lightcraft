@@ -85,6 +85,13 @@ pub(super) fn structure_agrees(sensor: &Rgb32f, reference: &Rgb32f) -> bool {
     at_zero >= MIN_STRUCTURE && shift.0.abs() <= 1 && shift.1.abs() <= 1
 }
 
+/// Per-file fits measure database shading against the camera JPEG. A pooled CR3
+/// fit applies shading only to its warp proposal and retains its unshaded fallback.
+pub(super) enum ProxyLens<'a> {
+    PerFile(Option<&'a lightcraft_develop::EmbeddedLens>),
+    Pooled(Option<&'a lightcraft_develop::EmbeddedLens>),
+}
+
 /// Same-size proxies of the sensor (white-balanced, baseline exposure, through `transform`'s
 /// matrix: the generic camera ≈ sRGB model) and of the file's embedded camera JPEG (linear Rec.2020),
 /// and per proxy pixel whether any sensor sample it covers is clipped. `embedded`'s vignetting correction is applied to
@@ -98,20 +105,20 @@ pub(super) fn proxies(
     lens: Option<&LensGeometry>,
     embedded: Option<&lightcraft_develop::EmbeddedLens>,
 ) -> Option<(Rgb32f, Rgb32f, Vec<bool>)> {
-    framed_proxies(raw, bytes, transform, size, min_fraction, lens, embedded).map(|(sensor, reference, clipped, _)| (sensor, reference, clipped))
+    framed_proxies(raw, bytes, transform, size, min_fraction, lens, ProxyLens::PerFile(embedded))
+        .map(|(sensor, reference, clipped, _)| (sensor, reference, clipped))
 }
 
-/// [`proxies`], and the CR3 framing the sensor proxy was moved to ([`estimate_cr3_framing`]; `None` when it was not
-/// moved): a pixel of the returned CR3 sensor proxy shows the oriented sensor at `framing.source` of its position.
-pub(super) fn framed_proxies(
+/// [`proxies`], and the mapping from the selected proxy to its oriented sensor, used for database vignetting.
+pub(super) fn framed_proxies<'a>(
     raw: &RawImage,
     bytes: &[u8],
     transform: &CameraTransform,
     size: usize,
     min_fraction: f64,
     lens: Option<&LensGeometry>,
-    embedded: Option<&lightcraft_develop::EmbeddedLens>,
-) -> Option<(Rgb32f, Rgb32f, Vec<bool>, Option<Cr3Framing>)> {
+    profile: ProxyLens<'a>,
+) -> Option<(Rgb32f, Rgb32f, Vec<bool>, ProxyFrame<'a>)> {
     let edge = (2 * size).max(384) as u32;
     let decoded = crate::files::decode_raw_preview(
         bytes,
@@ -146,11 +153,15 @@ pub(super) fn framed_proxies(
     let k = (crop.width.max(crop.height).div_ceil(edge as usize).max(2)).div_ceil(2) * 2;
     let mut sensor = sensor_proxy(raw, k, edge as usize)?;
     let mut clipped = clip_mask(&sensor);
-    let mut framing = None;
+    let mut frame = ProxyFrame::new(raw.orientation);
+    let embedded = match profile {
+        ProxyLens::PerFile(lens) | ProxyLens::Pooled(lens) => lens,
+    };
+    let cr3_pool = raw.format == RawFormat::Cr3 && matches!(profile, ProxyLens::Pooled(_));
     // A database describes the lens; only the share of its shading correction visible in the JPEG
     // belongs in the fit. File-owned corrections describe what the camera applied to this image.
     let database_vignette = embedded.filter(|e| e.source == lightcraft_develop::LensSource::Database && lens.is_none()).and_then(|e| e.vignette);
-    if database_vignette.is_none() {
+    if !cr3_pool && database_vignette.is_none() {
         correct_vignetting(&mut sensor, embedded, raw.orientation);
     }
     // The camera may have corrected its JPEG with the lens warp the file carries (Nikon Z lenses always, at up to 9 %
@@ -162,8 +173,8 @@ pub(super) fn framed_proxies(
     let gain = 2f32.powf(transform.baseline_exposure as f32);
     let to_working = |p: [f32; 3]| transform.matrix.apply_f32(std::array::from_fn(|i| p[i] * transform.wb[i] * gain));
     // External profiles describe the developed default crop, unlike OpcodeList3's active-area warp.
-    // Keep the established CR3/in-file routes; only an uncalibrated file with no in-file warp
-    // may propose this additional correspondence geometry. Its acceptance uses edges, never RGB error.
+    // For non-CR3 files a database warp may compete with the uncorrected sensor only in the absence
+    // of an in-file warp. CR3 also compares its proposal against the framing-only fallback below.
     let aligned_external = embedded
         .filter(|correction| {
             raw.format != RawFormat::Cr3
@@ -185,13 +196,21 @@ pub(super) fn framed_proxies(
     }
     if raw.format == RawFormat::Cr3 {
         // Orient the camera JPEG and the sensor identically before collecting pixel correspondences.
+        let correction = embedded.filter(|correction| transform.matrix_is_fallback && lens.is_none() && correction.warp.is_some());
+        // A pooled fit historically used an unshaded framing fallback. Apply database shading
+        // only to the proposed sensor, at the source position before orientation and the warp.
+        let pooled_candidate = correction.filter(|c| cr3_pool && c.vignette.is_some()).map(|correction| {
+            let mut candidate = sensor.clone();
+            correct_vignetting(&mut candidate, Some(correction), raw.orientation);
+            let mut candidate = candidate.into_oriented(raw.orientation);
+            candidate.map_in_place(to_working);
+            candidate
+        });
         sensor = sensor.into_oriented(raw.orientation);
         clipped = clipped.into_oriented(raw.orientation);
         reference = reference.into_oriented(raw.orientation);
         sensor.map_in_place(to_working);
-        // Canon's JPEG can be cropped differently from the sensor. Estimate only that common
-        // framing from edge directions, independently of the subsequent colour fit.
-        (sensor, clipped, framing) = align_cr3_framing(sensor, clipped, &reference);
+        (sensor, clipped, frame) = align_cr3_geometry(sensor, clipped, &reference, correction, pooled_candidate.as_ref());
     }
     let mut sensor = fit(&sensor, size, size, Filter::Box);
     let mut reference_small = reference_at(&reference, &sensor);
@@ -210,12 +229,10 @@ pub(super) fn framed_proxies(
     if raw.format != RawFormat::Cr3 && !external_applied {
         sensor.map_in_place(to_working);
     }
-    if let Some(vignette) = database_vignette.filter(|_| !external_applied) {
-        // CR3 is now in the JPEG’s oriented frame. Other proxies are still in sensor orientation.
-        let orientation = if raw.format == RawFormat::Cr3 { lightcraft_geom::Orientation::Normal } else { raw.orientation };
-        database_vignetting(&mut sensor, &reference, &clipped, &vignette, ProxyFrame { orientation, framing });
+    if let Some(vignette) = database_vignette.filter(|_| !external_applied && !cr3_pool) {
+        database_vignetting(&mut sensor, &reference, &clipped, &vignette, frame);
     }
-    Some((sensor, reference, clipped, framing))
+    Some((sensor, reference, clipped, frame))
 }
 
 fn clipped_pixels(mask: &Rgb32f, sensor: &Rgb32f) -> Vec<bool> {
@@ -252,12 +269,45 @@ impl Cr3Framing {
 /// A separate third of the edges must confirm a substantial improvement and a close match.
 /// A weak, flat or unrelated preview leaves the sensor framing unchanged.
 pub(super) fn estimate_cr3_framing(sensor: &Rgb32f, reference: &Rgb32f) -> Option<Cr3Framing> {
-    estimate_framing_against(sensor, reference, None)
+    estimate_framing_against(sensor, reference, None, None)
 }
 
-/// Score both a proposed lens geometry and its bounded framing against the original sensor.
-/// The identity framing is a valid candidate: lens correction alone may already align the JPEG.
-fn estimate_framing_against(sensor: &Rgb32f, reference: &Rgb32f, original: Option<&Rgb32f>) -> Option<Cr3Framing> {
+#[cfg(test)]
+thread_local! {
+    static FRAMING_SEARCHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static LAST_GEOMETRY_SCORES: std::cell::Cell<Option<[f64; 4]>> = const { std::cell::Cell::new(None) };
+    static LAST_FRAMED_SCORES: std::cell::Cell<Option<[f64; 4]>> = const { std::cell::Cell::new(None) };
+}
+
+/// Read and reset this thread's framing-search budget, independent of elapsed time.
+#[cfg(test)]
+pub(super) fn take_framing_search_count() -> usize {
+    FRAMING_SEARCHES.replace(0)
+}
+
+/// Return this test thread's last `[train_before, train_after, held_before, held_after]`
+/// scores against the original sensor geometry.
+#[cfg(test)]
+pub(super) fn geometry_gate_scores() -> Option<[f64; 4]> {
+    LAST_GEOMETRY_SCORES.get()
+}
+
+/// Return this test thread's last `[train_before, train_after, held_before, held_after]`
+/// scores comparing the CR3 proposal with the established framing fallback.
+#[cfg(test)]
+pub(super) fn geometry_framed_scores() -> Option<[f64; 4]> {
+    LAST_FRAMED_SCORES.get()
+}
+
+/// Judge a proposed lens warp and bounded framing against the original sensor on fixed
+/// training and independent held-out edges. Lens-only correction may be sufficient.
+fn estimate_framing_against(sensor: &Rgb32f, reference: &Rgb32f, original: Option<&Rgb32f>, framed: Option<&Rgb32f>) -> Option<Cr3Framing> {
+    #[cfg(test)]
+    {
+        FRAMING_SEARCHES.set(FRAMING_SEARCHES.get() + 1);
+        LAST_GEOMETRY_SCORES.set(None);
+        LAST_FRAMED_SCORES.set(None);
+    }
     if sensor.width.checked_mul(sensor.height)? != sensor.data.len() || reference.width.checked_mul(reference.height)? != reference.data.len() {
         return None;
     }
@@ -276,6 +326,11 @@ fn estimate_framing_against(sensor: &Rgb32f, reference: &Rgb32f, original: Optio
     if (original.width, original.height) != (w, h) || original.data.len() != sensor.data.len() {
         return None;
     }
+    let framed = framed.map(|image| fit(image, PROXY, PROXY, Filter::Box));
+    if framed.as_ref().is_some_and(|image| (image.width, image.height) != (w, h) || image.data.len() != sensor.data.len()) {
+        return None;
+    }
+    let mut framed_gradients = framed.as_ref().map(|_| Rgb32f::new(w, h));
     let mut gradients = Rgb32f::new(w, h);
     let mut original_gradients = Rgb32f::new(w, h);
     let mut edges = Vec::new();
@@ -291,6 +346,10 @@ fn estimate_framing_against(sensor: &Rgb32f, reference: &Rgb32f, original: Optio
             gradients.data[y * w + x] = [d[0], d[1], 0.0];
             let d = derivative(&original);
             original_gradients.data[y * w + x] = [d[0], d[1], 0.0];
+            if let (Some(image), Some(gradients)) = (&framed, &mut framed_gradients) {
+                let d = derivative(image);
+                gradients.data[y * w + x] = [d[0], d[1], 0.0];
+            }
             let d = derivative(&reference);
             let magnitude = d[0].hypot(d[1]);
             let value = luminance_2020(reference.data[y * w + x]);
@@ -391,8 +450,23 @@ fn estimate_framing_against(sensor: &Rgb32f, reference: &Rgb32f, original: Optio
         score(&original_gradients, Cr3Framing::IDENTITY, true, proposal.then_some((&gradients, best.1)))?,
         score(&gradients, best.1, true, proposal.then_some((&original_gradients, Cr3Framing::IDENTITY)))?,
     );
+    #[cfg(test)]
+    if proposal {
+        LAST_GEOMETRY_SCORES.set(Some([best.2, best.0, held_before, held_after]));
+    }
     if best.0 < 0.9 || best.0 < best.2 + 0.04 || held_after < 0.9 || held_after < held_before + 0.04 {
         return None;
+    }
+    if let Some(framed) = &framed_gradients {
+        let before = score(framed, Cr3Framing::IDENTITY, false, Some((&gradients, best.1)))?;
+        let after = score(&gradients, best.1, false, Some((framed, Cr3Framing::IDENTITY)))?;
+        let held_before = score(framed, Cr3Framing::IDENTITY, true, Some((&gradients, best.1)))?;
+        let held_after = score(&gradients, best.1, true, Some((framed, Cr3Framing::IDENTITY)))?;
+        #[cfg(test)]
+        LAST_FRAMED_SCORES.set(Some([before, after, held_before, held_after]));
+        if after < before || held_after < held_before {
+            return None;
+        }
     }
     if lightcraft_pipeline::profiling() {
         eprintln!("[profile] camera JPEG framing {:?}, held-out edge agreement {held_before:.4} -> {held_after:.4}", best.1);
@@ -403,29 +477,62 @@ fn estimate_framing_against(sensor: &Rgb32f, reference: &Rgb32f, original: Optio
 /// Exercise the proposal gate independently of lens-map construction in regressions.
 #[cfg(test)]
 pub(super) fn estimate_profile_framing(candidate: &Rgb32f, reference: &Rgb32f, original: &Rgb32f) -> Option<Cr3Framing> {
-    estimate_framing_against(candidate, reference, Some(original))
+    estimate_framing_against(candidate, reference, Some(original), None)
 }
 
-/// The sensor proxy and its clip mask (same size), both moved to the camera JPEG's framing, and that framing (`None`
-/// when they stay as they are).
-fn align_cr3_framing(sensor: Rgb32f, clipped: Rgb32f, reference: &Rgb32f) -> (Rgb32f, Rgb32f, Option<Cr3Framing>) {
-    let Some(framing) = estimate_cr3_framing(&sensor, reference) else { return (sensor, clipped, None) };
-    let apply = |image: &Rgb32f| {
-        let (w, h) = (image.width, image.height);
-        let mut aligned = Rgb32f::new(w, h);
-        for (i, pixel) in aligned.data.iter_mut().enumerate() {
-            let (x, y) = framing.source((i % w) as f32 + 0.5, (i / w) as f32 + 0.5, w, h);
-            *pixel = if x >= 0.5 && y >= 0.5 && x <= w as f32 - 0.5 && y <= h as f32 - 0.5 { image.sample_bilinear(x, y) } else { [f32::NAN; 3] };
-        }
-        aligned
+/// Choose CR3 correspondence without copying the unregistered sensor or mask. The
+/// unwarped fallback and warped proposal need separate searches: their pixels and
+/// support rules differ, and the proposal must preserve the accepted fallback.
+pub(super) fn align_cr3_geometry<'a>(
+    sensor: Rgb32f,
+    clipped: Rgb32f,
+    reference: &Rgb32f,
+    correction: Option<&'a lightcraft_develop::EmbeddedLens>,
+    candidate_sensor: Option<&Rgb32f>,
+) -> (Rgb32f, Rgb32f, ProxyFrame<'a>) {
+    let frame = |source: &Rgb32f| {
+        let framing = estimate_cr3_framing(source, reference);
+        (framing, framing.map(|framing| apply_cr3_framing(source, framing)))
     };
-    (apply(&sensor), apply(&clipped), Some(framing))
+    // Score the warp against the same shading on the original and framed baselines.
+    let source = candidate_sensor.unwrap_or(&sensor);
+    let (mut framing, mut fallback) = frame(source);
+    let orientation = lightcraft_geom::Orientation::Normal;
+    if let Some(lens) = correction
+        && let Some((aligned, mask, framing)) =
+            align_profile_geometry_against(source, &clipped, reference, lens, orientation, Some(fallback.as_ref().unwrap_or(source)))
+    {
+        return (aligned, mask, ProxyFrame { orientation, framing: Some(framing), lens: Some(lens) });
+    }
+    if candidate_sensor.is_some() {
+        // The pooled proposal was rejected. Restore the framing selected on the original samples.
+        (framing, fallback) = frame(&sensor);
+    }
+    // The mask is needed only if the fallback wins; when no framing is accepted,
+    // return both original allocations unchanged.
+    let clipped = if let Some(framing) = framing { apply_cr3_framing(&clipped, framing) } else { clipped };
+    (fallback.unwrap_or(sensor), clipped, ProxyFrame { orientation, framing, lens: None })
+}
+
+/// Move one image to the accepted camera framing, preserving invalid border samples.
+fn apply_cr3_framing(image: &Rgb32f, framing: Cr3Framing) -> Rgb32f {
+    let (w, h) = (image.width, image.height);
+    let mut aligned = Rgb32f::new(w, h);
+    for (i, pixel) in aligned.data.iter_mut().enumerate() {
+        let (x, y) = framing.source((i % w) as f32 + 0.5, (i / w) as f32 + 0.5, w, h);
+        *pixel = if x >= 0.5 && y >= 0.5 && x <= w as f32 - 0.5 && y <= h as f32 - 0.5 { image.sample_bilinear(x, y) } else { [f32::NAN; 3] };
+    }
+    aligned
 }
 
 /// Resample a correspondence image with a common source map. Nonfinite/outside coordinates
 /// become NaN so they cannot contribute colour or tone training pairs. A nonnegative clip mask
 /// uses the same bilinear map: any clipped contributing sample remains strictly positive.
-pub(super) fn resample_correspondence(image: &Rgb32f, source: impl Fn(f64, f64) -> lightcraft_geom::Point) -> Rgb32f {
+pub(super) fn resample_correspondence(
+    image: &Rgb32f,
+    source: impl Fn(f64, f64) -> lightcraft_geom::Point,
+    sample: fn(&Rgb32f, f64, f64) -> [f32; 3],
+) -> Rgb32f {
     let (w, h) = (image.width, image.height);
     let mut out = Rgb32f::new(w, h);
     if w == 0 || h == 0 {
@@ -434,7 +541,7 @@ pub(super) fn resample_correspondence(image: &Rgb32f, source: impl Fn(f64, f64) 
     for (i, pixel) in out.data.iter_mut().enumerate() {
         let p = source((i % w) as f64 + 0.5, (i / w) as f64 + 0.5);
         *pixel = if p.x.is_finite() && p.y.is_finite() && p.x >= 0.5 && p.y >= 0.5 && p.x <= w as f64 - 0.5 && p.y <= h as f64 - 0.5 {
-            sample_correspondence(image, p.x as f32 - 0.5, p.y as f32 - 0.5)
+            sample(image, p.x, p.y)
         } else {
             [f32::NAN; 3]
         };
@@ -442,10 +549,11 @@ pub(super) fn resample_correspondence(image: &Rgb32f, source: impl Fn(f64, f64) 
     out
 }
 
-/// Bilinear interpolation inside the image, with integer coordinates at pixel centres.
+/// Bilinear interpolation at the established non-CR3 proxy's f32 precision.
 /// At an exact coordinate the two bounds coincide. An invalid neighbour with zero weight
 /// must not turn a usable training pixel or its clip mask into NaN.
-fn sample_correspondence(image: &Rgb32f, x: f32, y: f32) -> [f32; 3] {
+pub(super) fn sample_correspondence(image: &Rgb32f, x: f64, y: f64) -> [f32; 3] {
+    let (x, y) = (x as f32 - 0.5, y as f32 - 0.5);
     let row = |y| -> [f32; 3] {
         let left = image.get(x.floor() as usize, y);
         let right = image.get(x.ceil() as usize, y);
@@ -454,6 +562,20 @@ fn sample_correspondence(image: &Rgb32f, x: f32, y: f32) -> [f32; 3] {
     let top = row(y.floor() as usize);
     let bottom = row(y.ceil() as usize);
     std::array::from_fn(|i| top[i] + (bottom[i] - top[i]) * y.fract())
+}
+
+/// Two-stage CR3 registration keeps f64 source coordinates so a positive neighbour weight survives near pixel centres.
+pub(super) fn sample_cr3_correspondence(image: &Rgb32f, x: f64, y: f64) -> [f32; 3] {
+    let (x, y) = (x - 0.5, y - 0.5);
+    let blend = |a: [f32; 3], b: [f32; 3], t: f64| std::array::from_fn(|i| (f64::from(a[i]) * (1.0 - t) + f64::from(b[i]) * t) as f32);
+    // The first warp can leave a NaN border. Read a neighbour only when it contributes.
+    let (x0, y0) = (x.floor() as usize, y.floor() as usize);
+    let row = |y| {
+        let left = image.get(x0, y);
+        if x.fract() == 0.0 { left } else { blend(left, image.get(x0 + 1, y), x.fract()) }
+    };
+    let top = row(y0);
+    if y.fract() == 0.0 { top } else { blend(top, row(y0 + 1), y.fract()) }
 }
 
 /// A resolved profile is a proposal for camera-JPEG geometry, never an instruction to change
@@ -467,27 +589,43 @@ pub(super) fn align_profile_geometry(
     correction: &lightcraft_develop::EmbeddedLens,
     orientation: lightcraft_geom::Orientation,
 ) -> Option<(Rgb32f, Rgb32f)> {
+    align_profile_geometry_against(sensor, clipped, reference, correction, orientation, None).map(|(sensor, mask, _)| (sensor, mask))
+}
+
+/// Propose lens geometry plus bounded framing and require the original training/held-out gates.
+/// When supplied, the framed CR3 baseline must also be preserved or improved on both splits.
+fn align_profile_geometry_against(
+    sensor: &Rgb32f,
+    clipped: &Rgb32f,
+    reference: &Rgb32f,
+    correction: &lightcraft_develop::EmbeddedLens,
+    orientation: lightcraft_geom::Orientation,
+    cr3_baseline: Option<&Rgb32f>,
+) -> Option<(Rgb32f, Rgb32f, Cr3Framing)> {
     if correction.warp.is_none() || (sensor.width, sensor.height) != (clipped.width, clipped.height) {
         return None;
     }
     let (w, h) = (sensor.width as f64, sensor.height as f64);
     let (ow, oh) = if orientation.swaps_axes() { (h, w) } else { (w, h) };
     let correction = lightcraft_pipeline::optics::reorient_lens(correction, orientation.inverse(), ow, oh);
-    let mut warp = lightcraft_pipeline::optics::Warp::identity(w, h);
-    warp.lens = Some(correction);
-    warp.lens_dist = 1.0;
+    let warp = profile_warp(&correction, w, h);
     let source = |x, y| warp.corrected_to_source(lightcraft_geom::Point::new(x, y), 1);
-    let candidate = resample_correspondence(sensor, source);
-    let framing = estimate_framing_against(&candidate, reference, Some(sensor))?;
-    let mask = resample_correspondence(clipped, source);
+    let sample = if cr3_baseline.is_some() { sample_cr3_correspondence } else { sample_correspondence };
+    let candidate = resample_correspondence(sensor, source, sample);
+    let framing = estimate_framing_against(&candidate, reference, Some(sensor), cr3_baseline)?;
+    let mask = resample_correspondence(clipped, source, sample);
     let frame = |x: f64, y: f64| {
         let (x, y) = framing.source(x as f32, y as f32, sensor.width, sensor.height);
         lightcraft_geom::Point::new(f64::from(x), f64::from(y))
     };
-    let mask = resample_correspondence(&mask, frame);
-    let aligned = resample_correspondence(&candidate, frame);
+    let mask = resample_correspondence(&mask, frame, sample);
+    let aligned = resample_correspondence(&candidate, frame, sample);
+    // CR3 shading is handled by the caller on the selected geometry.
+    if cr3_baseline.is_some() {
+        return Some((aligned, mask, framing));
+    }
     let Some(vignette) = correction.vignette.filter(|_| correction.source == lightcraft_develop::LensSource::Database) else {
-        return Some((aligned, mask));
+        return Some((aligned, mask, framing));
     };
 
     // Estimate shading only after the edges agree. Each gain belongs to the source position reached
@@ -501,12 +639,20 @@ pub(super) fn align_profile_geometry(
     });
     let amount = vignetting_amount_from_gains(&small, &reference_at(reference, &small), &clipped_pixels(&mask, &small), gains);
     if amount == 0.0 {
-        return Some((aligned, mask));
+        return Some((aligned, mask, framing));
     }
     // Apply the measured share before interpolation, exactly where the sensor samples came from.
     let mut shaded = sensor.clone();
     apply_vignetting(&mut shaded, &vignette, ProxyFrame::new(lightcraft_geom::Orientation::Normal), amount);
-    Some((resample_correspondence(&resample_correspondence(&shaded, source), frame), mask))
+    Some((resample_correspondence(&resample_correspondence(&shaded, source, sample), frame, sample), mask, framing))
+}
+
+/// Green-plane mapping from corrected pixels to their sensor positions at this proxy size.
+pub(super) fn profile_warp(lens: &lightcraft_develop::EmbeddedLens, w: f64, h: f64) -> lightcraft_pipeline::optics::Warp {
+    let mut warp = lightcraft_pipeline::optics::Warp::identity(w, h);
+    warp.lens = Some(*lens);
+    warp.lens_dist = 1.0;
+    warp
 }
 
 /// What one photo contributes to a camera profile ([`profile_samples`]), in white-balanced camera RGB.
@@ -531,7 +677,7 @@ pub(crate) fn profile_samples(
         return None;
     }
     let transform = lightcraft_raw::color::camera_transform(raw, lightcraft_raw::color::as_shot_white_xy(raw));
-    let (sensor, reference, clipped) = proxies(raw, bytes, &transform, PROFILE_PROXY, 0.0, lens, correction)?;
+    let (sensor, reference, clipped, _) = framed_proxies(raw, bytes, &transform, PROFILE_PROXY, 0.0, lens, ProxyLens::Pooled(correction))?;
     let to_camera = transform.matrix.inverse()?;
     // clipped sensor pixels don't record the scene's colour (see `fit_look`)
     let sensor = without_clipped(&sensor, &clipped).unwrap_or(sensor);
