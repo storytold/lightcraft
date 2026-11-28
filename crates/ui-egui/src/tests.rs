@@ -91,6 +91,7 @@ mod mode_dropdowns;
 mod move_folder;
 mod offline;
 mod open_lightroom;
+mod panel_keys;
 mod panel_restore;
 pub(super) mod panels;
 mod preset_favorites;
