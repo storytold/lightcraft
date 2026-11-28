@@ -180,8 +180,9 @@ fn run_transfer(t: Transfer, file_bytes: Option<&crate::merge::ByteReader>) -> P
 /// The backup copy of a file an import put at `stored` inside `root` — with a Move's sidecars beside
 /// it, so the backup holds what the destination does ([`crate::import_move::backup_copy`]); its path,
 /// or why it has none. `probe_hash` is the content hash of `stored` as the import read it (`None`:
-/// compared byte for byte). A backup place that is the file imported from (`source`) or one of its
-/// sidecars is no backup: the identical file found there is the original, which a Move removes.
+/// compared byte for byte). A backup place that is the file imported from (`source`), the main copy
+/// (`stored`) or one of their sidecars is no backup: the identical file found there is that file
+/// itself, and a Move removes the original.
 fn back_up(
     source: &str,
     stored: &str,
@@ -192,8 +193,12 @@ fn back_up(
 ) -> Result<String, String> {
     let expect = probe_hash.and_then(lightcraft_preview::Hash128::parse);
     let same = |a: &Path, b: &Path| crate::import_move::resolved(a) == crate::import_move::resolved(b);
-    let is_source = |p: &Path| same(p, Path::new(source)) || placed.is_some_and(|pl| pl.sidecars.iter().any(|sc| same(p, &sc.src)));
-    let refuse = |p: &Path| format!("the backup's place {} is the original being imported: no backup copy was made", p.display());
+    let is_source = |p: &Path| {
+        same(p, Path::new(source))
+            || same(p, Path::new(stored))
+            || placed.is_some_and(|pl| pl.sidecars.iter().any(|sc| same(p, &sc.src) || same(p, &sc.dst)))
+    };
+    let refuse = |p: &Path| format!("the backup's place {} is the file being imported or its copy: no backup copy was made", p.display());
     let copy = crate::import_move::backup_copy(Path::new(stored), root, to, expect)?;
     if is_source(&copy) {
         return Err(refuse(&copy));

@@ -624,7 +624,7 @@ fn a_bad_backup_copy_is_caught_and_a_move_keeps_its_original() {
     let r = import_move(&mut s, &[&card], &dest, json!({"organize": "flat", "backup": card.to_string_lossy()}));
     assert_eq!(len(&r, "imported"), 1, "{r}");
     assert_eq!(len(&r, "backups"), 0, "{r}");
-    assert!(r["backupFailed"][0]["reason"].as_str().unwrap().contains("the original"), "{r}");
+    assert!(r["backupFailed"][0]["reason"].as_str().unwrap().contains("the file being imported"), "{r}");
     assert_eq!(len(&r, "moved"), 0, "{r}");
     assert!(card.join("a.png").is_file(), "the original stays: {r}");
     let _ = std::fs::remove_dir_all(&base);
@@ -668,7 +668,8 @@ fn a_backup_folder_that_cannot_be_a_backup_is_refused() {
         )
     };
     assert!(run(&mut s, "add", &base.join("bk")).is_err());
-    for b in [dest.clone(), dest.join("bk"), base.clone()] {
+    // (the last one goes through a folder that doesn't exist yet and back out of it, into the destination)
+    for b in [dest.clone(), dest.join("bk"), base.clone(), base.join("not-yet").join("..").join("out").join("bk")] {
         let e = run(&mut s, "copy", &b).unwrap_err().to_string();
         assert!(e.contains("outside the destination"), "{}: {e}", b.display());
     }

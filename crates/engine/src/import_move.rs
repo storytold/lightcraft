@@ -113,24 +113,31 @@ pub(crate) fn inside(path: &Path, dir: &Path) -> bool {
     }
 }
 
-/// `path` with symbolic links and `..` resolved, also when it doesn't exist yet: its nearest
-/// existing ancestor resolved, with the rest of the path after it (a folder an import is about to
-/// create still lands where its existing parent's links point).
+/// `path` made absolute, with symbolic links and `..` resolved, also when it doesn't exist yet:
+/// each part is followed in turn, through the links of the parts that exist, so a folder an import
+/// is about to create still lands where its existing parents' links point, and a `..` after a part
+/// that doesn't exist yet steps back from it.
 pub(crate) fn resolved(path: &Path) -> PathBuf {
-    let mut rest = Vec::new();
-    let mut at = path;
-    loop {
-        if let Ok(real) = fs::canonicalize(at) {
-            return rest.iter().rev().fold(real, |p, part| p.join(part));
-        }
-        match (at.parent(), at.file_name()) {
-            (Some(parent), Some(name)) => {
-                rest.push(name.to_os_string());
-                at = parent;
+    let abs =
+        if path.is_absolute() { path.to_path_buf() } else { std::env::current_dir().map(|d| d.join(path)).unwrap_or_else(|_| path.to_path_buf()) };
+    let mut out = PathBuf::new();
+    for part in abs.components() {
+        match part {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
             }
-            _ => return path.to_path_buf(),
+            std::path::Component::Normal(name) => {
+                out.push(name);
+                // (only after a name: a bare drive canonicalizes to that drive's current folder)
+                if let Ok(real) = fs::canonicalize(&out) {
+                    out = real;
+                }
+            }
+            root => out.push(root),
         }
     }
+    out
 }
 
 pub(crate) fn is_symlink(path: &Path) -> bool {
