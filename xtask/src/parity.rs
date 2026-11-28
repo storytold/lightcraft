@@ -706,7 +706,9 @@ old
     #[test]
     fn repeated_headless_or_reach_marks_are_refused() {
         let row = |evidence: &str| format!("## S\n\n| LR-S-X | x | P0 | ✅ | {evidence} | |\n");
-        for evidence in ["`cmd:view.detail` `headless:no` `reach:window` `headless:yes`", "`cmd:view.detail` `headless:no` `reach:window` `reach:desk`"] {
+        for evidence in
+            ["`cmd:view.detail` `headless:no` `reach:window` `headless:yes`", "`cmd:view.detail` `headless:no` `reach:window` `reach:desk`"]
+        {
             let errs = parse(&row(evidence)).errors;
             assert!(errs.iter().any(|e| e.contains("appears more than once")), "{evidence}: {errs:?}");
         }
