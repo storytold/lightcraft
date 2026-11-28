@@ -750,6 +750,11 @@
 - A library that already holds such a loop opens as before; only what the albums on it show changes.
 ## 2026-10-23
 
+### The filmstrip rings the selected photos before their thumbnails load
+- A selected photo's cell in the filmstrip shows its ring (the theme's active and selected rings) on the
+  placeholder while its thumbnail is still loading, as the grid already does. Before, the active photo's cell looked
+  like the other selected cells until the thumbnails arrived.
+
 ### AI Denoise works out of the box
 - Turning on AI Denoise no longer asks for an ONNX model and a `denoise-model.json`: LightCraft's own built-in
   denoiser runs automatically. Installing a model of your own is optional (Settings ▸ AI Denoise ▸ Your own model);
@@ -837,7 +842,6 @@
   in a flat area the noise alone decided which. Where neither guess is clearly better it now blends the two, so the
   noise looks like grain. Edges are as sharp as before. Thumbnails and previews that LightCraft rendered from a raw
   are redrawn; the camera's own embedded preview, shown for an unedited raw until its render is ready, is unchanged.
-
 
 ### Tab leaves the name field in New Album, New Smart Album and the name prompts
 - In New Album, New Smart Album, Save Metadata Preset and the other dialogs with one name field, the field has the

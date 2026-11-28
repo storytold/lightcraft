@@ -6,7 +6,7 @@ use std::time::Duration;
 use lightcraft_catalog::{Op, Stack, StackId};
 use serde_json::json;
 
-use crate::headless::Headless;
+use crate::headless::{Headless, RenderGate};
 use crate::{LightcraftApp, Services};
 
 const T: Duration = Duration::from_secs(20);
@@ -81,6 +81,48 @@ fn the_filmstrip_marks_the_active_photo_heavier_than_the_other_selected_one() {
     assert!(crate::theme::current(&h.view.ctx).is_some_and(|k| !k.is_dark()));
     let active = h.app.session.selection.active.expect("active");
     let other = if active == a { b } else { a };
+    let shapes = h.view.painted_shapes();
+    let strokes = |id: lightcraft_catalog::PhotoId| -> Vec<(f32, egui::Color32)> {
+        let cell = h.app.widgets.iter().find(|(w, _)| *w == format!("film:{}", id.0)).map(|(_, r)| *r).expect("cell drawn");
+        shapes
+            .iter()
+            .filter_map(|s| match s {
+                Shape::Rect(rs) if rs.stroke.width > 0.0 && rs.stroke_kind == egui::StrokeKind::Outside && cell.contains_rect(rs.rect) => {
+                    Some((rs.stroke.width, rs.stroke.color))
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    let (on_active, on_other, on_unselected) = (strokes(active), strokes(other), strokes(c));
+    assert_eq!(on_active, vec![(3.0, t.ring_active), (1.0, t.ring_inner)]);
+    assert_eq!(on_other, vec![(1.5, t.ring_selected)]);
+    assert!(on_unselected.is_empty(), "{on_unselected:?}");
+}
+
+/// Until its thumbnail arrives, a selected filmstrip cell still carries the same theme-token rings
+/// as a loaded one (LR-VIEW-FILMSTRIP / issue that #2768 covered).
+#[test]
+fn filmstrip_rings_selected_cells_whose_thumbnail_is_not_loaded() {
+    use egui::epaint::Shape;
+    let mut session = lightcraft_engine::Session::with_demo();
+    let ids = session.visible_cloned();
+    let (a, b, c) = (ids[0], ids[1], ids[2]);
+    let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    // renders are held: the thumbnails stay unloaded however fast the machine is
+    h.app.renderer.set_offload(Box::new(RenderGate::new(std::rc::Rc::new(std::cell::Cell::new(false)))));
+    h.app.ui.settings.appearance_mode = crate::state::AppearanceMode::Light;
+    let r = h.request("ui.set", json!({"view": "detail"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let r = h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [a.0, b.0]}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    let active = h.app.session.selection.active.expect("active");
+    let other = if active == a { b } else { a };
+    assert!(h.app.renderer.thumb(active).is_none() && h.app.renderer.thumb(other).is_none(), "thumbnails are still loading");
+    let t = crate::theme::Tokens::get(&h.view.ctx);
     let shapes = h.view.painted_shapes();
     let strokes = |id: lightcraft_catalog::PhotoId| -> Vec<(f32, egui::Color32)> {
         let cell = h.app.widgets.iter().find(|(w, _)| *w == format!("film:{}", id.0)).map(|(_, r)| *r).expect("cell drawn");
