@@ -95,7 +95,8 @@ use tone::{HighlightCheck, ToneFit, fit_tone, fit_tone_conditional, highlights};
 /// (`camera_vignetting_amount`, ranked within chromaticity classes), not whole: JPEGs that show less of it fitted looks too
 /// dark, with skewed colour. The same for a DNG's tone fit; a CR3 proxy gets the gain where its framed pixels come from.
 /// 27: geometry-gated external lens and camera framing for JPEG calibration correspondences.
-pub const LOOK_VERSION: u32 = 27;
+/// 28: the bundled NIKON D780, D750 and D90 profiles.
+pub const LOOK_VERSION: u32 = 28;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {

@@ -1273,6 +1273,13 @@
 
 ## 2026-10-16
 
+### Nikon D750, D780 and D90 colour profiles from one library
+- Raws from the Nikon D750, D780 and D90 now start from a built-in colour profile, made with
+  `lightcraft-cli calibrate` from about 300 photos per camera (about 100 for the D90, all shot with the Standard
+  Picture Control), with the camera's tone curve. Colours that one photo
+  shows only a little of, and shadows you push up, keep the camera's colour instead of whatever that photo's own fit
+  learned.
+
 ### Dark raws keep their camera's colour and tone
 - A raw whose camera JPEG is too dark (or too colourless) to fit a look to no longer drops its camera profile's
   colour for the dull neutral fallback: it keeps the profile's colour, with the JPEG's tone curve when one fits, else

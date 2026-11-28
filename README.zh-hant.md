@@ -320,7 +320,7 @@ LightCraft 還很年輕，而且進展飛快：**Alpha 階段**。**老實說，
   在單機上處理 JPEG/DNG，以及大多數 Sony／Panasonic／
   Fujifilm／Nikon／較舊款 Canon 的 raw 都很出色；各機型詳情見 [docs/raw-parity.md](docs/raw-parity.md)。
 - **最大的缺口：**
-  - **相機色彩校正：** Sony、Nikon、Panasonic、Fujifilm 和 Canon CR3 的 raw 會從各自的相機 JPEG 得到受保護的估計值，內建 ILCA-99M2、ILCE-7CR、ILCE-7M4、ILCE-7RM5、X-H2S、X-T4、Nikon Z 6II、Z 8 和 D5300 描述檔；仍缺少實測校正，其他 raw 或被拒絕的擬合會保留中性矩陣；
+  - **相機色彩校正：** Sony、Nikon、Panasonic、Fujifilm 和 Canon CR3 的 raw 會從各自的相機 JPEG 得到受保護的估計值，內建 ILCA-99M2、ILCE-7CR、ILCE-7M4、ILCE-7RM5、X-H2S、X-T4、Nikon Z 6II、Z 8、D5300、D750、D780 和 D90 描述檔；仍缺少實測校正，其他 raw 或被拒絕的擬合會保留中性矩陣；
   - **壓縮的 Olympus raw 與不受支援的 CR3 變體：** 這些在有內嵌 JPEG 預覽時會改用預覽畫面。Fujifilm 無損／有損壓縮 RAF 現在能解碼感光元件資料；[驗證與現有照片庫重新載入說明](docs/raf-compression.md)；
   - **AI 遮色片與降噪：** 主體與天空選取目前是傳統啟發式演算法；
   - **網路照片庫：** 預覽只讀取 raw 的標頭 — 或者，對於 CR3 或預覽標籤位於其後的 TIFF raw，只讀取稀疏規劃器指定的範圍 — 以及其內嵌的 JPEG（56.5 MB → 5.9 MB，10 秒 → 1 秒，測得於測試用的網路共用資料夾），但*顯影後*的畫面仍需要透過網路傳輸感光元件資料；詳見 [docs/raw-preview-reads.md](docs/raw-preview-reads.md)；
