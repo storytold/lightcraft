@@ -77,6 +77,7 @@ impl LightcraftApp {
             drop_pending: vec![],
             copied: None,
             pending_picks: vec![],
+            opening_library: None,
             missing: Default::default(),
             synthetic_mods: egui::Modifiers::NONE,
             synthetic_mods_release: false,
@@ -701,6 +702,7 @@ impl LightcraftApp {
             self.accesskit_language = Some(language.to_owned());
         }
         let t0 = monotonic_ms();
+        crate::library_open::run_pending(self, ctx);
         self.note_max_texture_side(ctx);
         self.note_shot_geometry(ctx);
         self.ensure_fonts(ctx);

@@ -32,6 +32,7 @@ pub mod headless;
 pub mod i18n;
 pub mod icons;
 pub mod lens_db;
+pub mod library_open;
 pub mod lightroom_import;
 pub mod links;
 pub mod loupe_timing;
@@ -259,6 +260,8 @@ pub struct LightcraftApp {
     pub copied: Option<String>,
     /// Native file dialogs up for commands (`pick`): each command runs again when its closes.
     pub(crate) pending_picks: Vec<pick::Pending>,
+    /// A library opened from a menu or the Open Library dialog, waiting for its message to show (#2718).
+    pub opening_library: Option<library_open::Pending>,
     /// `library.missing` requests from the control channel and the check that answers them on a
     /// worker thread ([`missing_sweep`]).
     pub(crate) missing: missing_sweep::State,

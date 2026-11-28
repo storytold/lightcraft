@@ -152,7 +152,12 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     app.pending_picks = waiting;
     for (p, paths) in answered {
         let params = with_answer(&p.params, p.key, p.kind, &paths);
-        match app.run(&p.command, params) {
+        // a library chosen in Open Library opens once the window says so (#2718)
+        let r = match crate::library_open::later(app, &p.command, &params) {
+            Some(r) => r,
+            None => app.run(&p.command, params),
+        };
+        match r {
             Ok(r) => {
                 if let Some(text) = answered_message(&p.command, &r) {
                     app.toast(ctx, text);

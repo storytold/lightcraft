@@ -463,6 +463,7 @@ impl LightcraftApp {
             panels::dialogs::show(self, &ctx, notice_blocks);
             updates_ui::show(self, &ctx);
             panels::library_problem::show(self, &ctx, notice_blocks);
+            crate::library_open::show(self, &ctx);
             panels::toast(self, &ctx);
             drop_overlay::show(self, &ctx);
             if notice_blocks {
@@ -507,6 +508,7 @@ impl LightcraftApp {
             panels::left::section_drag_feedback(self, &ctx);
             panels::keyword_list::drag_feedback(self, &ctx);
         }
+        crate::library_open::show(self, &ctx);
         panels::toast(self, &ctx);
         drop_overlay::show(self, &ctx);
         // AppKit moves the window on a drag anywhere in the title-bar band unless the window isn't
