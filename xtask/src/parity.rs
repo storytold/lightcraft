@@ -49,6 +49,13 @@ pub struct Row {
     pub tier: String,
     pub status: Status,
     pub section: String,
+    /// 1-based line in the document.
+    pub line: usize,
+    /// The row's `` `cmd:<id>` `` references.
+    pub cmds: Vec<String>,
+    /// A hand-written RFC-0052 `` `headless:<value>` `` and `` `reach:<class>` ``, if any.
+    pub headless: Option<String>,
+    pub reach: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -135,7 +142,24 @@ pub fn parse(md: &str) -> Doc {
         if !seen.insert(id.to_string()) {
             doc.errors.push(format!("{DOC}:{n}: duplicate id {id}"));
         }
-        doc.rows.push(Row { id: id.to_string(), tier: cells[2].to_string(), status, section: section.clone() });
+        let spans = code_spans(line);
+        let cmds = spans.iter().filter_map(|s| s.strip_prefix("cmd:")).filter(|id| concrete(id)).map(str::to_string).collect();
+        for key in ["headless:", "reach:"] {
+            if spans.iter().filter(|s| s.starts_with(key)).count() > 1 {
+                doc.errors.push(format!("{DOC}:{n}: {id}: `{key}` appears more than once"));
+            }
+        }
+        let field = |key: &str| spans.iter().find_map(|s| s.strip_prefix(key)).map(str::to_string);
+        doc.rows.push(Row {
+            id: id.to_string(),
+            tier: cells[2].to_string(),
+            status,
+            section: section.clone(),
+            line: n,
+            cmds,
+            headless: field("headless:"),
+            reach: field("reach:"),
+        });
     }
     doc
 }
@@ -200,6 +224,59 @@ pub fn check(doc: &Doc, commands: &BTreeSet<String>, controls: &BTreeSet<String>
         }
     }
     out
+}
+
+/// A row's RFC-0052 `headless:` value and `reach:`.
+///
+/// `yes` is computed, never written: a done or partial row is `yes` when it cites at least one
+/// `` `cmd:` `` and every one is an engine command (`lightcraft-cli commands`, the registry the CLI
+/// and the MCP server load). A `UI_COMMANDS` id makes a row live in the desktop app only, so it
+/// doesn't count. Otherwise the row keeps its hand-written `` `headless:no` ``/`` `headless:partial` ``
+/// with a `` `reach:window` ``, `` `reach:os` `` or `` `reach:engine-gap` ``, or is `unknown`.
+pub fn headless(row: &Row, engine: &BTreeSet<String>) -> Result<(&'static str, Option<&'static str>), String> {
+    let computed = matches!(row.status, Status::Done | Status::Partial) && !row.cmds.is_empty() && row.cmds.iter().all(|c| known(engine, c));
+    let at = format!("{DOC}:{}: {}", row.line, row.id);
+    let reach = match row.reach.as_deref() {
+        None => None,
+        Some("window") => Some("window"),
+        Some("os") => Some("os"),
+        Some("engine-gap") => Some("engine-gap"),
+        Some(other) => return Err(format!("{at}: `reach:{other}` is not window, os or engine-gap")),
+    };
+    match (row.headless.as_deref(), reach) {
+        (None, None) => Ok((if computed { "yes" } else { "unknown" }, None)),
+        (None, Some(_)) => Err(format!("{at}: `reach:` needs `headless:no` or `headless:partial`")),
+        (Some("yes"), _) => Err(format!("{at}: `headless:yes` is never written: a row is yes when every `cmd:` it cites is an engine command")),
+        (Some("unknown"), None) => Ok(("unknown", None)),
+        (Some(v @ ("no" | "partial")), None) => Err(format!("{at}: `headless:{v}` needs a `reach:`")),
+        (Some("no"), Some(_)) if computed => Err(format!("{at}: `headless:no`, but every `cmd:` it cites is an engine command (yes, or partial)")),
+        (Some("no"), r) => Ok(("no", r)),
+        (Some("partial"), r) => Ok(("partial", r)),
+        (Some(other), _) => Err(format!("{at}: `headless:{other}` is not no, partial or unknown")),
+    }
+}
+
+/// Hand-mark problems ([`headless`] errors) of every row.
+pub fn check_headless(doc: &Doc, engine: &BTreeSet<String>) -> Vec<String> {
+    doc.rows.iter().filter_map(|r| headless(r, engine).err()).collect()
+}
+
+/// The RFC-0052 summary line: rows by `headless:` value, `no` split by `reach:`.
+pub fn headless_line(doc: &Doc, engine: &BTreeSet<String>) -> String {
+    let values: Vec<(&str, Option<&str>)> = doc.rows.iter().map(|r| headless(r, engine).unwrap_or(("unknown", None))).collect();
+    let count = |v: &str| values.iter().filter(|h| h.0 == v).count();
+    let no = |r: &str| values.iter().filter(|h| h.0 == "no" && h.1 == Some(r)).count();
+    format!(
+        "Headless ([RFC-0052](https://github.com/storytold/craft-contrib/blob/main/rfcs/0052-headless-reach.md), computed from the `cmd:` references): **{} yes**, {} no (window {}, os {}, engine-gap {}), {} partial, {} unknown of {} rows.",
+        count("yes"),
+        count("no"),
+        no("window"),
+        no("os"),
+        no("engine-gap"),
+        count("partial"),
+        count("unknown"),
+        values.len()
+    )
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -379,7 +456,8 @@ pub fn run(root: &Path, write: bool) -> Result<(), String> {
     let md = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let doc = parse(&md);
     let menus = menu_sources(&root.join("crates/ui-egui/src"))?;
-    let mut commands = registry("commands")?;
+    let engine = registry("commands")?;
+    let mut commands = engine.clone();
     commands.extend(ui_command_ids(&menus));
     let controls = registry("controls")?;
     let mut problems = check(&doc, &commands, &controls, |p| {
@@ -389,8 +467,9 @@ pub fn run(root: &Path, write: bool) -> Result<(), String> {
     let gaps = std::fs::read_to_string(root.join(GAPS)).map_err(|e| format!("{GAPS}: {e}"))?;
     problems.extend(check_gaps(&gaps));
     problems.extend(check_headers(root)?);
+    problems.extend(check_headless(&doc, &engine));
 
-    let table = summary_table(&doc);
+    let table = format!("{}\n{}\n", summary_table(&doc), headless_line(&doc, &engine));
     println!("Lightroom parity ({DOC}): {} rows, {} references\n", doc.rows.len(), doc.refs.len());
     print!("{table}");
     if write {
@@ -577,6 +656,63 @@ old
         assert!(!new.contains("\nold\n"));
         assert!(new.contains(&format!("{BEGIN}\n{table}{END}")));
         assert_eq!(with_summary(&new, &table).unwrap(), new, "idempotent");
+    }
+
+    #[test]
+    fn headless_is_yes_only_for_engine_commands() {
+        let md = "\
+## A. Rows
+
+| Id | Feature | Tier | Status | Evidence | Notes |
+|---|---|---|---|---|---|
+| LR-A-ENGINE | e | P0 | ✅ | `cmd:library.import`, `cmd:develop.*` | |
+| LR-A-UI | u | P0 | ✅ | `cmd:library.import`, `cmd:view.detail` | |
+| LR-A-NONE | n | P0 | 🟡 | `crates/x.rs` | |
+| LR-A-MISSING | m | P0 | ⬜ | `cmd:library.import` | |
+| LR-A-WINDOW | w | P1 | ✅ | `cmd:view.detail` | `headless:no` `reach:window` |
+| LR-A-PART | p | P1 | ✅ | `cmd:library.import` | `headless:partial` `reach:os` |
+";
+        let d = parse(md);
+        let engine = set(&["library.import", "develop.exposure"]);
+        let v: Vec<_> = d.rows.iter().map(|r| headless(r, &engine)).collect();
+        assert_eq!(v[0], Ok(("yes", None)), "every cited id is an engine command (a prefix matches too)");
+        assert_eq!(v[1], Ok(("unknown", None)), "a UI_COMMANDS id doesn't make a row yes");
+        assert_eq!(v[2], Ok(("unknown", None)), "no `cmd:` to look up");
+        assert_eq!(v[3], Ok(("unknown", None)), "a missing feature isn't reachable");
+        assert_eq!(v[4], Ok(("no", Some("window"))));
+        assert_eq!(v[5], Ok(("partial", Some("os"))));
+        assert!(check_headless(&d, &engine).is_empty());
+        let line = headless_line(&d, &engine);
+        assert!(line.contains("**1 yes**, 1 no (window 1, os 0, engine-gap 0), 1 partial, 3 unknown of 6 rows"), "{line}");
+    }
+
+    #[test]
+    fn bad_headless_marks_are_refused() {
+        let row = |evidence: &str| format!("## S\n\n| LR-S-X | x | P0 | ✅ | {evidence} | |\n");
+        let engine = set(&["library.import"]);
+        for (evidence, want) in [
+            ("`cmd:view.detail` `headless:yes`", "is never written"),
+            ("`cmd:view.detail` `headless:no`", "needs a `reach:`"),
+            ("`cmd:view.detail` `reach:os`", "needs `headless:no`"),
+            ("`cmd:view.detail` `headless:no` `reach:desk`", "not window, os or engine-gap"),
+            ("`cmd:view.detail` `headless:maybe` `reach:os`", "not no, partial or unknown"),
+            ("`cmd:library.import` `headless:no` `reach:window`", "every `cmd:` it cites is an engine command"),
+        ] {
+            let errs = check_headless(&parse(&row(evidence)), &engine);
+            assert!(errs.iter().any(|e| e.contains(want)), "{evidence}: {errs:?}");
+        }
+    }
+
+    #[test]
+    fn repeated_headless_or_reach_marks_are_refused() {
+        let row = |evidence: &str| format!("## S\n\n| LR-S-X | x | P0 | ✅ | {evidence} | |\n");
+        for evidence in
+            ["`cmd:view.detail` `headless:no` `reach:window` `headless:yes`", "`cmd:view.detail` `headless:no` `reach:window` `reach:desk`"]
+        {
+            let errs = parse(&row(evidence)).errors;
+            assert!(errs.iter().any(|e| e.contains("appears more than once")), "{evidence}: {errs:?}");
+        }
+        assert!(parse(&row("`cmd:view.detail` `headless:no` `reach:window`")).errors.is_empty());
     }
 
     #[test]
